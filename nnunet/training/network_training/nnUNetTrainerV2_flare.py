@@ -219,8 +219,15 @@ class nnUNetTrainerV2_flare(nnUNetTrainerV2):
                                     net_nonlin, net_nonlin_kwargs, True, False, lambda x: x, InitWeights_He(1e-2),
                                     self.net_num_pool_op_kernel_sizes, self.net_conv_kernel_sizes, False, True,
                                     True)
+        
         if torch.cuda.is_available():
             self.network.cuda()
+            # from torchsummary import summary
+            # summary(self.network, (1, 80, 192, 160))
+
+            # from fvcore.nn import FlopCountAnalysis
+            # flops = FlopCountAnalysis(self.network, torch.rand(2, 1, 80, 192, 160).cuda())
+            # print(flops.total())
         self.network.inference_apply_nonlin = softmax_helper
 
 # class nnUNetTrainerV2(nnUNetTrainer):
