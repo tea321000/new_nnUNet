@@ -87,6 +87,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
             self.ds_loss_weights = weights
             # now wrap the loss
             self.loss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
+            self.unsup_loss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
             ################# END ###################
 
             self.folder_with_preprocessed_data = join(self.dataset_directory, self.plans['data_identifier'] +
@@ -237,7 +238,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
         self.network.do_ds = ds
         return ret
 
-    def run_iteration(self, data_generator, do_backprop=True, run_online_evaluation=False):
+    def run_iteration(self, data_generator, do_backprop=True, run_online_evaluation=False, data_unsup_generator=None, epochs = 0, threshold_epochs = 100):
         """
         gradient clipping improves training stability
 
@@ -246,47 +247,99 @@ class nnUNetTrainerV2(nnUNetTrainer):
         :param run_online_evaluation:
         :return:
         """
-        data_dict = next(data_generator)
-        data = data_dict['data']
-        target = data_dict['target']
+        if data_unsup_generator is not None and epochs > threshold_epochs:
+            data_dict = next(data_generator)
+            data = data_dict['data']
+            target = data_dict['target']
 
-        data = maybe_to_torch(data)
-        target = maybe_to_torch(target)
+            data_unsup_dict = next(data_unsup_generator)
+            unsup_data = data_dict['data']
+            unsup_data = maybe_to_torch(unsup_data)
 
-        if torch.cuda.is_available():
-            data = to_cuda(data)
-            target = to_cuda(target)
+            if torch.cuda.is_available():
+                data = to_cuda(data)
+                target = to_cuda(target)
+                unsup_data = to_cuda(unsup_data)
 
-        self.optimizer.zero_grad()
+            self.optimizer.zero_grad()
 
-        if self.fp16:
-            with autocast():
+            if self.fp16:
+                with autocast():
+                    output = self.network(data)
+                    del data
+                    l = self.loss(output, target)
+                    unsup_output = self.network(unsup_data)
+                    ul = self.unsup_loss(output, target)
+
+                if do_backprop:
+                    self.amp_grad_scaler.scale(l).backward()
+                    self.amp_grad_scaler.scale(ul).backward()
+                    self.amp_grad_scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                    self.amp_grad_scaler.step(self.optimizer)
+                    self.amp_grad_scaler.update()
+            else:
+                output = self.network(data)
+                del data
+                l = self.loss(output, target)
+                unsup_output = self.network(unsup_data)
+                ul = self.unsup_loss(unsup_output)
+
+                if do_backprop:
+                    l.backward()
+                    torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                    self.optimizer.step()
+
+            if run_online_evaluation:
+                self.run_online_evaluation(output, target)
+
+            del target
+
+            return l.detach().cpu().numpy()
+        else:
+            data_dict = next(data_generator)
+            data = data_dict['data']
+            target = data_dict['target']
+
+            data = maybe_to_torch(data)
+            target = maybe_to_torch(target)
+
+            if torch.cuda.is_available():
+                data = to_cuda(data)
+                target = to_cuda(target)
+
+
+            self.optimizer.zero_grad()
+
+            if self.fp16:
+                with autocast():
+                    output = self.network(data)
+                    del data
+                    l = self.loss(output, target)
+
+                if do_backprop:
+                    self.amp_grad_scaler.scale(l).backward()
+                    self.amp_grad_scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                    self.amp_grad_scaler.step(self.optimizer)
+                    self.amp_grad_scaler.update()
+            else:
                 output = self.network(data)
                 del data
                 l = self.loss(output, target)
 
-            if do_backprop:
-                self.amp_grad_scaler.scale(l).backward()
-                self.amp_grad_scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
-                self.amp_grad_scaler.step(self.optimizer)
-                self.amp_grad_scaler.update()
-        else:
-            output = self.network(data)
-            del data
-            l = self.loss(output, target)
+                if do_backprop:
+                    l.backward()
+                    torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                    self.optimizer.step()
 
-            if do_backprop:
-                l.backward()
-                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
-                self.optimizer.step()
+            if run_online_evaluation:
+                self.run_online_evaluation(output, target)
 
-        if run_online_evaluation:
-            self.run_online_evaluation(output, target)
+            del target
 
-        del target
+            return l.detach().cpu().numpy()
 
-        return l.detach().cpu().numpy()
 
     def do_split(self):
         """

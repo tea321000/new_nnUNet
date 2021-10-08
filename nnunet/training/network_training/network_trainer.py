@@ -481,6 +481,8 @@ class NetworkTrainer(object):
                         tbar.set_description("Epoch {}/{}".format(self.epoch + 1, self.max_num_epochs))
 
                         l = self.run_iteration(self.tr_gen, True)
+                        if self.semi_percent < 1:
+                            ul = self.run_iteration(self.unsup_gen, True, epochs = self.epoch + 1)
 
                         tbar.set_postfix(loss=l)
                         train_losses_epoch.append(l)
