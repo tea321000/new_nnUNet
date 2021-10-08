@@ -30,7 +30,7 @@ except ImportError as ie:
 
 def get_no_augmentation(dataloader_train, dataloader_val, params=default_3D_augmentation_params,
                         deep_supervision_scales=None, soft_ds=False,
-                        classes=None, pin_memory=True, regions=None):
+                        classes=None, pin_memory=True, regions=None, dataloader_unsup=None):
     """
     use this instead of get_default_augmentation (drop in replacement) to turn off all data augmentation
     """
@@ -61,10 +61,14 @@ def get_no_augmentation(dataloader_train, dataloader_val, params=default_3D_augm
 
     tr_transforms = Compose(tr_transforms)
 
-    batchgenerator_train = MultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads'),
+    batchgenerator_train = MultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads') if dataloader_unsup is None else max(params.get('num_threads'), 1),
                                                   params.get("num_cached_per_thread"),
                                                   seeds=range(params.get('num_threads')), pin_memory=pin_memory)
     batchgenerator_train.restart()
+    batchgenerator_unsup = MultiThreadedAugmenter(dataloader_unsup, tr_transforms, params.get('num_threads'),
+                                                  params.get("num_cached_per_thread"),
+                                                  seeds=range(params.get('num_threads')), pin_memory=pin_memory)
+    batchgenerator_unsup.restart()
 
     val_transforms = []
     val_transforms.append(RemoveLabelTransform(-1, 0))
@@ -94,5 +98,8 @@ def get_no_augmentation(dataloader_train, dataloader_val, params=default_3D_augm
                                                 seeds=range(max(params.get('num_threads') // 2, 1)),
                                                 pin_memory=pin_memory)
     batchgenerator_val.restart()
-    return batchgenerator_train, batchgenerator_val
+    if dataloader_unsup is not None:
+        return batchgenerator_train, batchgenerator_unsup, batchgenerator_val
+    else:
+        return batchgenerator_train, batchgenerator_val
 

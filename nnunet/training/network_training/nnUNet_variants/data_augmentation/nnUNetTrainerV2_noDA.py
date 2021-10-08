@@ -41,6 +41,10 @@ class nnUNetTrainerV2_noDataAugmentation(nnUNetTrainerV2):
             dl_val = DataLoader3D(self.dataset_val, self.patch_size, self.patch_size, self.batch_size, False,
                                   oversample_foreground_percent=self.oversample_foreground_percent,
                                   pad_mode="constant", pad_sides=self.pad_all_sides)
+            if self.semi_percent < 1:
+                dl_unsup = DataLoader3D(self.dataset_unsup, self.patch_size, self.patch_size, self.batch_size,
+                                     False, oversample_foreground_percent=self.oversample_foreground_percent
+                                     , pad_mode="constant", pad_sides=self.pad_all_sides)
         else:
             dl_tr = DataLoader2D(self.dataset_tr, self.patch_size, self.patch_size, self.batch_size,
                                  transpose=self.plans.get('transpose_forward'),
@@ -50,7 +54,15 @@ class nnUNetTrainerV2_noDataAugmentation(nnUNetTrainerV2):
                                   transpose=self.plans.get('transpose_forward'),
                                   oversample_foreground_percent=self.oversample_foreground_percent,
                                   pad_mode="constant", pad_sides=self.pad_all_sides)
-        return dl_tr, dl_val
+            if self.semi_percent < 1:
+                dl_unsup = DataLoader2D(self.dataset_unsup, self.patch_size, self.patch_size, self.batch_size,
+                                     transpose=self.plans.get('transpose_forward'),
+                                     oversample_foreground_percent=self.oversample_foreground_percent
+                                     , pad_mode="constant", pad_sides=self.pad_all_sides)
+        if self.semi_percent < 1:
+            return dl_tr, dl_unsup, dl_val
+        else:
+            return dl_tr, dl_val
 
     def initialize(self, training=True, force_load_plans=False):
         if not self.was_initialized:
@@ -92,11 +104,16 @@ class nnUNetTrainerV2_noDataAugmentation(nnUNetTrainerV2):
                     print(
                         "INFO: Not unpacking data! Training may be slow due to that. Pray you are not using 2d or you "
                         "will wait all winter for your model to finish!")
-
-                self.tr_gen, self.val_gen = get_no_augmentation(self.dl_tr, self.dl_val,
-                                                                params=self.data_aug_params,
-                                                                deep_supervision_scales=self.deep_supervision_scales,
-                                                                pin_memory=self.pin_memory)
+                if self.semi_percent < 1:
+                    self.tr_gen, self.unsup_gen, self.val_gen = get_no_augmentation(self.dl_tr, self.dl_val,
+                                                                    params=self.data_aug_params,
+                                                                    deep_supervision_scales=self.deep_supervision_scales,
+                                                                    pin_memory=self.pin_memory)
+                else:
+                    self.tr_gen, self.val_gen = get_no_augmentation(self.dl_tr, self.dl_val,
+                                                                    params=self.data_aug_params,
+                                                                    deep_supervision_scales=self.deep_supervision_scales,
+                                                                    pin_memory=self.pin_memory)
 
                 self.print_to_log_file("TRAINING KEYS:\n %s" % (str(self.dataset_tr.keys())),
                                        also_print_to_console=False)

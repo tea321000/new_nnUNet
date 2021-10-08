@@ -92,7 +92,10 @@ class nnUNetTrainerV2(nnUNetTrainer):
             self.folder_with_preprocessed_data = join(self.dataset_directory, self.plans['data_identifier'] +
                                                       "_stage%d" % self.stage)
             if training:
-                self.dl_tr, self.dl_val = self.get_basic_generators()
+                if self.semi_percent < 1:
+                    self.dl_tr, self.dl_unsup, self.dl_val = self.get_basic_generators()
+                else:
+                    self.dl_tr, self.dl_val = self.get_basic_generators()
                 if self.unpack_data:
                     print("unpacking dataset")
                     unpack_dataset(self.folder_with_preprocessed_data)
@@ -101,18 +104,32 @@ class nnUNetTrainerV2(nnUNetTrainer):
                     print(
                         "INFO: Not unpacking data! Training may be slow due to that. Pray you are not using 2d or you "
                         "will wait all winter for your model to finish!")
-
-                self.tr_gen, self.val_gen = get_moreDA_augmentation(
-                    self.dl_tr, self.dl_val,
-                    self.data_aug_params[
-                        'patch_size_for_spatialtransform'],
-                    self.data_aug_params,
-                    deep_supervision_scales=self.deep_supervision_scales,
-                    pin_memory=self.pin_memory,
-                    use_nondetMultiThreadedAugmenter=False
-                )
+                if self.semi_percent < 1:
+                    self.tr_gen, self.unsup_gen, self.val_gen = get_moreDA_augmentation(
+                        self.dl_tr, self.dl_val,
+                        self.data_aug_params[
+                            'patch_size_for_spatialtransform'],
+                        self.data_aug_params,
+                        deep_supervision_scales=self.deep_supervision_scales,
+                        pin_memory=self.pin_memory,
+                        use_nondetMultiThreadedAugmenter=False,
+                        dataloader_unsup=self.dl_unsup
+                    )
+                else:
+                    self.tr_gen, self.val_gen = get_moreDA_augmentation(
+                        self.dl_tr, self.dl_val,
+                        self.data_aug_params[
+                            'patch_size_for_spatialtransform'],
+                        self.data_aug_params,
+                        deep_supervision_scales=self.deep_supervision_scales,
+                        pin_memory=self.pin_memory,
+                        use_nondetMultiThreadedAugmenter=False
+                    )
                 self.print_to_log_file("TRAINING KEYS:\n %s" % (str(self.dataset_tr.keys())),
                                        also_print_to_console=False)
+                if self.semi_percent<1:
+                    self.print_to_log_file("UNSUPERVISED KEYS:\n %s" % (str(self.dataset_unsup.keys())),
+                                           also_print_to_console=False)
                 self.print_to_log_file("VALIDATION KEYS:\n %s" % (str(self.dataset_val.keys())),
                                        also_print_to_console=False)
             else:

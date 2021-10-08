@@ -43,7 +43,7 @@ def get_moreDA_augmentation(dataloader_train, dataloader_val, patch_size, params
                             seeds_train=None, seeds_val=None, order_seg=1, order_data=3, deep_supervision_scales=None,
                             soft_ds=False,
                             classes=None, pin_memory=True, regions=None,
-                            use_nondetMultiThreadedAugmenter: bool = False):
+                            use_nondetMultiThreadedAugmenter: bool = False, dataloader_unsup=None):
     assert params.get('mirror') is None, "old version of params, use new keyword do_mirror"
 
     tr_transforms = []
@@ -156,13 +156,21 @@ def get_moreDA_augmentation(dataloader_train, dataloader_val, patch_size, params
     if use_nondetMultiThreadedAugmenter:
         if NonDetMultiThreadedAugmenter is None:
             raise RuntimeError('NonDetMultiThreadedAugmenter is not yet available')
-        batchgenerator_train = NonDetMultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads'),
+        batchgenerator_train = NonDetMultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads') if dataloader_unsup is None else max(params.get('num_threads') // 2, 1),
                                                             params.get("num_cached_per_thread"), seeds=seeds_train,
                                                             pin_memory=pin_memory)
+        if dataloader_unsup is not None:
+            batchgenerator_unsup = NonDetMultiThreadedAugmenter(dataloader_unsup, tr_transforms, params.get('num_threads'),
+                                                                params.get("num_cached_per_thread"), seeds=seeds_train,
+                                                                pin_memory=pin_memory)
     else:
-        batchgenerator_train = MultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads'),
+        batchgenerator_train = MultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads') if dataloader_unsup is None else max(params.get('num_threads') // 2, 1),
                                                       params.get("num_cached_per_thread"),
                                                       seeds=seeds_train, pin_memory=pin_memory)
+        if dataloader_unsup is not None:
+            batchgenerator_unsup = MultiThreadedAugmenter(dataloader_unsup, tr_transforms, params.get('num_threads'),
+                                                          params.get("num_cached_per_thread"),
+                                                          seeds=seeds_train, pin_memory=pin_memory)
     # batchgenerator_train = SingleThreadedAugmenter(dataloader_train, tr_transforms)
     # import IPython;IPython.embed()
 
@@ -205,6 +213,8 @@ def get_moreDA_augmentation(dataloader_train, dataloader_val, patch_size, params
                                                     params.get("num_cached_per_thread"),
                                                     seeds=seeds_val, pin_memory=pin_memory)
     # batchgenerator_val = SingleThreadedAugmenter(dataloader_val, val_transforms)
-
-    return batchgenerator_train, batchgenerator_val
+    if dataloader_unsup is not None:
+        return batchgenerator_train, batchgenerator_unsup, batchgenerator_val
+    else:
+        return batchgenerator_train, batchgenerator_val
 
