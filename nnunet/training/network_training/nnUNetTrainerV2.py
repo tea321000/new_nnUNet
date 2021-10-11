@@ -263,17 +263,29 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
             self.optimizer.zero_grad()
 
+            consistency_counts = epochs / threshold_epochs
+
             if self.fp16:
                 with autocast():
                     output = self.network(data)
                     del data
                     l = self.loss(output, target)
-                    unsup_output = self.network(unsup_data)
-                    ul = self.unsup_loss(output, target)
+                    consistency_outputs = []
+                    consistency_outputs.append(self.network(unsup_data))
+                    for i in range(max(consistency_counts, 3)):
+                        if i == 0:
+                            consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4,))), (4,)))
+                        elif i == 1:
+                            consistency_outputs.append(
+                                torch.flip(self.network(torch.flip(unsup_data, (4, 3,))), (4, 3,)))
+                        elif i == 2:
+                            consistency_outputs.append(
+                                torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2))), (4, 3, 2)))
+                    del unsup_data
+                    ul = self.unsup_loss(output, consistency_counts)
 
                 if do_backprop:
-                    self.amp_grad_scaler.scale(l).backward()
-                    self.amp_grad_scaler.scale(ul).backward()
+                    self.amp_grad_scaler.scale(l+ul).backward()
                     self.amp_grad_scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
                     self.amp_grad_scaler.step(self.optimizer)
@@ -282,8 +294,17 @@ class nnUNetTrainerV2(nnUNetTrainer):
                 output = self.network(data)
                 del data
                 l = self.loss(output, target)
-                unsup_output = self.network(unsup_data)
-                ul = self.unsup_loss(unsup_output)
+                consistency_outputs = []
+                consistency_outputs.append(self.network(unsup_data))
+                for i in range(max(consistency_counts, 3)):
+                    if i == 0:
+                        consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4, ))), (4, )))
+                    elif i == 1:
+                        consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4, 3, ))), (4, 3, )))
+                    elif i == 2:
+                        consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2))), (4, 3, 2)))
+                del unsup_data
+                ul = self.unsup_loss(output, consistency_counts)
 
                 if do_backprop:
                     l.backward()
@@ -372,6 +393,20 @@ class nnUNetTrainerV2(nnUNetTrainer):
                     splits[-1]['val'] = test_keys
                 save_pickle(splits, splits_file)
 
+            if self.semi_percent < 1:
+                if not isfile(semi_splits_file):
+                    self.print_to_log_file("Creating new semi split...")
+                    pk_dict = load_pickle(splits_file)
+                    for fold in range(len(pk_dict)):
+                        pk_dict[fold]['unsupervised'] = pk_dict[fold]['train'][
+                                                        math.floor(len(pk_dict[fold]['train']) * self.semi_percent):]
+                        pk_dict[fold]['train'] = pk_dict[fold]['train'][
+                                                 :math.floor(len(pk_dict[fold]['train']) * self.semi_percent)]
+                    save_pickle(pk_dict, semi_splits_file)
+            if self.semi_percent < 1:
+                self.print_to_log_file("Using splits from existing split file:", semi_splits_file)
+                splits = load_pickle(semi_splits_file)
+                self.print_to_log_file("The split file contains %d splits." % len(splits))
             else:
                 self.print_to_log_file("Using splits from existing split file:", splits_file)
                 splits = load_pickle(splits_file)
@@ -381,6 +416,8 @@ class nnUNetTrainerV2(nnUNetTrainer):
             if self.fold < len(splits):
                 tr_keys = splits[self.fold]['train']
                 val_keys = splits[self.fold]['val']
+                if self.semi_percent < 1:
+                    unsup_keys = splits[self.fold]['unsupervised']
                 self.print_to_log_file("This split has %d training and %d validation cases."
                                        % (len(tr_keys), len(val_keys)))
             else:
@@ -398,10 +435,18 @@ class nnUNetTrainerV2(nnUNetTrainer):
                                        % (len(tr_keys), len(val_keys)))
 
         tr_keys.sort()
+        if self.semi_percent < 1:
+            unsup_keys.sort()
         val_keys.sort()
         self.dataset_tr = OrderedDict()
         for i in tr_keys:
             self.dataset_tr[i] = self.dataset[i]
+
+        if self.semi_percent < 1:
+            self.dataset_unsup = OrderedDict()
+            for i in unsup_keys:
+                self.dataset_unsup[i] = self.dataset[i]
+
         self.dataset_val = OrderedDict()
         for i in val_keys:
             self.dataset_val[i] = self.dataset[i]
