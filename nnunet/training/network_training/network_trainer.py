@@ -156,7 +156,7 @@ class NetworkTrainer(object):
         """
         splits_file = join(self.dataset_directory, "splits_final.pkl")
         if self.semi_percent < 1:
-            semi_splits_file = join(self.dataset_directory, "splits_final_semi" + semi_percent + ".pkl")
+            semi_splits_file = join(self.dataset_directory, "splits_final_semi" + str(self.semi_percent) + ".pkl")
         if not isfile(splits_file):
             self.print_to_log_file("Creating new split...")
             splits = []

@@ -17,8 +17,10 @@ from collections import OrderedDict
 from typing import Tuple
 
 import numpy as np
+import math
 import torch
 from nnunet.training.data_augmentation.data_augmentation_moreDA import get_moreDA_augmentation
+from nnunet.training.loss_functions.unsup_loss import UnsupervisedLoss
 from nnunet.training.loss_functions.deep_supervision import MultipleOutputLoss2
 from nnunet.utilities.to_torch import maybe_to_torch, to_cuda
 from nnunet.network_architecture.generic_UNet import Generic_UNet
@@ -45,7 +47,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
                  unpack_data=True, deterministic=True, fp16=False):
         super().__init__(plans_file, fold, output_folder, dataset_directory, batch_dice, stage, unpack_data,
                          deterministic, fp16)
-        self.max_num_epochs = 1000
+        self.max_num_epochs = 500
         self.initial_lr = 1e-2
         self.deep_supervision_scales = None
         self.ds_loss_weights = None
@@ -87,7 +89,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
             self.ds_loss_weights = weights
             # now wrap the loss
             self.loss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
-            self.unsup_loss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
+            self.unsup_loss = UnsupervisedLoss(self.loss, self.ds_loss_weights)
             ################# END ###################
 
             self.folder_with_preprocessed_data = join(self.dataset_directory, self.plans['data_identifier'] +
@@ -128,7 +130,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
                     )
                 self.print_to_log_file("TRAINING KEYS:\n %s" % (str(self.dataset_tr.keys())),
                                        also_print_to_console=False)
-                if self.semi_percent<1:
+                if self.semi_percent < 1:
                     self.print_to_log_file("UNSUPERVISED KEYS:\n %s" % (str(self.dataset_unsup.keys())),
                                            also_print_to_console=False)
                 self.print_to_log_file("VALIDATION KEYS:\n %s" % (str(self.dataset_val.keys())),
@@ -175,6 +177,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
                                     dropout_op_kwargs,
                                     net_nonlin, net_nonlin_kwargs, True, False, lambda x: x, InitWeights_He(1e-2),
                                     self.net_num_pool_op_kernel_sizes, self.net_conv_kernel_sizes, False, True, True)
+
         if torch.cuda.is_available():
             self.network.cuda()
         self.network.inference_apply_nonlin = softmax_helper
@@ -220,7 +223,8 @@ class nnUNetTrainerV2(nnUNetTrainer):
                                                          use_sliding_window: bool = True, step_size: float = 0.5,
                                                          use_gaussian: bool = True, pad_border_mode: str = 'constant',
                                                          pad_kwargs: dict = None, all_in_gpu: bool = False,
-                                                         verbose: bool = True, mixed_precision=True) -> Tuple[np.ndarray, np.ndarray]:
+                                                         verbose: bool = True, mixed_precision=True) -> Tuple[
+        np.ndarray, np.ndarray]:
         """
         We need to wrap this because we need to enforce self.network.do_ds = False for prediction
         """
@@ -238,7 +242,8 @@ class nnUNetTrainerV2(nnUNetTrainer):
         self.network.do_ds = ds
         return ret
 
-    def run_iteration(self, data_generator, do_backprop=True, run_online_evaluation=False, data_unsup_generator=None, epochs = 0, threshold_epochs = 100):
+    def run_iteration(self, data_generator, do_backprop=True, run_online_evaluation=False, data_unsup_generator=None,
+                      epochs=0, threshold_epochs=100):
         """
         gradient clipping improves training stability
 
@@ -283,9 +288,17 @@ class nnUNetTrainerV2(nnUNetTrainer):
                                 torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2))), (4, 3, 2)))
                     del unsup_data
                     ul = self.unsup_loss(output, consistency_counts)
+                    if consistency_counts == 1:
+                        l = 0.9 * l + 0.1 * ul
+                    elif consistency_counts == 2:
+                        l = 0.8 * l + 0.2 * ul
+                    elif consistency_counts == 3:
+                        l = 0.7 * l + 0.3 * ul
+                    elif consistency_counts > 3 and consistency_counts < 4:
+                        l = 0.5 * l + 0.5 * ul
 
                 if do_backprop:
-                    self.amp_grad_scaler.scale(l+ul).backward()
+                    self.amp_grad_scaler.scale(l).backward()
                     self.amp_grad_scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
                     self.amp_grad_scaler.step(self.optimizer)
@@ -298,13 +311,22 @@ class nnUNetTrainerV2(nnUNetTrainer):
                 consistency_outputs.append(self.network(unsup_data))
                 for i in range(max(consistency_counts, 3)):
                     if i == 0:
-                        consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4, ))), (4, )))
+                        consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4,))), (4,)))
                     elif i == 1:
-                        consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4, 3, ))), (4, 3, )))
+                        consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4, 3,))), (4, 3,)))
                     elif i == 2:
-                        consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2))), (4, 3, 2)))
+                        consistency_outputs.append(
+                            torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2))), (4, 3, 2)))
                 del unsup_data
                 ul = self.unsup_loss(output, consistency_counts)
+                if consistency_counts == 1:
+                    l = 0.9 * l + 0.1 * ul
+                elif consistency_counts == 2:
+                    l = 0.8 * l + 0.2 * ul
+                elif consistency_counts == 3:
+                    l = 0.7 * l + 0.3 * ul
+                elif consistency_counts > 3 and consistency_counts < 4:
+                    l = 0.5 * l + 0.5 * ul
 
                 if do_backprop:
                     l.backward()
@@ -328,7 +350,6 @@ class nnUNetTrainerV2(nnUNetTrainer):
             if torch.cuda.is_available():
                 data = to_cuda(data)
                 target = to_cuda(target)
-
 
             self.optimizer.zero_grad()
 
@@ -361,7 +382,6 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
             return l.detach().cpu().numpy()
 
-
     def do_split(self):
         """
         The default split is a 5 fold CV on all available training cases. nnU-Net will create a split (it is seeded,
@@ -378,7 +398,8 @@ class nnUNetTrainerV2(nnUNetTrainer):
             tr_keys = val_keys = list(self.dataset.keys())
         else:
             splits_file = join(self.dataset_directory, "splits_final.pkl")
-
+            if self.semi_percent < 1:
+                semi_splits_file = join(self.dataset_directory, "splits_final_semi" + str(self.semi_percent) + ".pkl")
             # if the split file does not exist we need to create it
             if not isfile(splits_file):
                 self.print_to_log_file("Creating new 5-fold cross-validation split...")
