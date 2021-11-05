@@ -75,7 +75,7 @@ class NetworkTrainer(object):
         self.network: Tuple[SegmentationNetwork, nn.DataParallel] = None
         self.optimizer = None
         self.lr_scheduler = None
-        self.tr_gen = self.val_gen = None
+        self.tr_gen = self.val_gen = self.unsup_gen = None
         self.was_initialized = False
 
         ################# SET THESE IN INIT ################################################
@@ -450,6 +450,7 @@ class NetworkTrainer(object):
 
         _ = self.tr_gen.next()
         _ = self.val_gen.next()
+        _ = self.unsup_gen.next()
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -480,7 +481,7 @@ class NetworkTrainer(object):
                     for b in tbar:
                         tbar.set_description("Epoch {}/{}".format(self.epoch + 1, self.max_num_epochs))
 
-                        l = self.run_iteration(self.tr_gen, True)
+                        l = self.run_iteration(self.tr_gen, True, data_unsup_generator=self.unsup_gen)
                         if self.semi_percent < 1:
                             ul = self.run_iteration(self.unsup_gen, True, epochs = self.epoch + 1)
 
@@ -488,7 +489,7 @@ class NetworkTrainer(object):
                         train_losses_epoch.append(l)
             else:
                 for _ in range(self.num_batches_per_epoch):
-                    l = self.run_iteration(self.tr_gen, True)
+                    l = self.run_iteration(self.tr_gen, True, data_unsup_generator=self.unsup_gen)
                     train_losses_epoch.append(l)
 
             self.all_tr_losses.append(np.mean(train_losses_epoch))
@@ -740,7 +741,7 @@ class NetworkTrainer(object):
 
         for batch_num in range(1, num_iters + 1):
             # +1 because this one here is not designed to have negative loss...
-            loss = self.run_iteration(self.tr_gen, do_backprop=True, run_online_evaluation=False).data.item() + 1
+            loss = self.run_iteration(self.tr_gen, do_backprop=True, run_online_evaluation=False, data_unsup_generator=self.unsup_gen).data.item() + 1
 
             # Compute the smoothed loss
             avg_loss = beta * avg_loss + (1 - beta) * loss

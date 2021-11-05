@@ -21,9 +21,10 @@ import math
 import torch
 from nnunet.training.data_augmentation.data_augmentation_moreDA import get_moreDA_augmentation
 from nnunet.training.loss_functions.unsup_loss import UnsupervisedLoss
+from nnunet.training.loss_functions.simcse_loss import SimCSELoss
 from nnunet.training.loss_functions.deep_supervision import MultipleOutputLoss2
 from nnunet.utilities.to_torch import maybe_to_torch, to_cuda
-from nnunet.network_architecture.generic_UNet import Generic_UNet
+from nnunet.network_architecture.generic_UNet_MOE import Generic_UNet_MOE
 from nnunet.network_architecture.initialization import InitWeights_He
 from nnunet.network_architecture.neural_network import SegmentationNetwork
 from nnunet.training.data_augmentation.default_data_augmentation import default_2D_augmentation_params, \
@@ -53,6 +54,9 @@ class nnUNetTrainerV2(nnUNetTrainer):
         self.ds_loss_weights = None
 
         self.pin_memory = True
+        # extra networks and optimizers for MOE
+        self.networks = []
+        self.optimizers = []
 
     def initialize(self, training=True, force_load_plans=False):
         """
@@ -89,7 +93,8 @@ class nnUNetTrainerV2(nnUNetTrainer):
             self.ds_loss_weights = weights
             # now wrap the loss
             self.loss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
-            self.unsup_loss = UnsupervisedLoss(self.loss, self.ds_loss_weights)
+            self.unsup_loss = UnsupervisedLoss()
+            self.sim_loss = SimCSELoss()
             ################# END ###################
 
             self.folder_with_preprocessed_data = join(self.dataset_directory, self.plans['data_identifier'] +
@@ -171,12 +176,14 @@ class nnUNetTrainerV2(nnUNetTrainer):
         dropout_op_kwargs = {'p': 0, 'inplace': True}
         net_nonlin = nn.LeakyReLU
         net_nonlin_kwargs = {'negative_slope': 1e-2, 'inplace': True}
-        self.network = Generic_UNet(self.num_input_channels, self.base_num_features, self.num_classes,
+        self.network = Generic_UNet_MOE(self.num_input_channels, self.base_num_features, self.num_classes,
                                     len(self.net_num_pool_op_kernel_sizes),
                                     self.conv_per_stage, 2, conv_op, norm_op, norm_op_kwargs, dropout_op,
                                     dropout_op_kwargs,
                                     net_nonlin, net_nonlin_kwargs, True, False, lambda x: x, InitWeights_He(1e-2),
                                     self.net_num_pool_op_kernel_sizes, self.net_conv_kernel_sizes, False, True, True)
+        # The method of load state dict is temporarily not enabled
+        # self.load_checkpoint(join(self.output_folder, "covid19_pretrain.model"), train=True)
 
         if torch.cuda.is_available():
             self.network.cuda()
@@ -186,6 +193,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
         assert self.network is not None, "self.initialize_network must be called first"
         self.optimizer = torch.optim.SGD(self.network.parameters(), self.initial_lr, weight_decay=self.weight_decay,
                                          momentum=0.99, nesterov=True)
+
         self.lr_scheduler = None
 
     def run_online_evaluation(self, output, target):
@@ -252,13 +260,13 @@ class nnUNetTrainerV2(nnUNetTrainer):
         :param run_online_evaluation:
         :return:
         """
-        if data_unsup_generator is not None and epochs > threshold_epochs:
+        if data_unsup_generator is not None:
             data_dict = next(data_generator)
             data = data_dict['data']
             target = data_dict['target']
 
             data_unsup_dict = next(data_unsup_generator)
-            unsup_data = data_dict['data']
+            unsup_data = data_unsup_dict['data']
             unsup_data = maybe_to_torch(unsup_data)
 
             if torch.cuda.is_available():
@@ -272,22 +280,28 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
             if self.fp16:
                 with autocast():
-                    output = self.network(data)
+                    output = self.network(data, top_k=2)
                     del data
-                    l = self.loss(output, target)
+                    l = 0
+                    for i in range(2):
+                        l += 1/2*self.loss(output[i], target)
                     consistency_outputs = []
-                    consistency_outputs.append(self.network(unsup_data))
+                    consistency_outputs.append(self.network(unsup_data, top_k=1))
                     for i in range(max(consistency_counts, 3)):
                         if i == 0:
-                            consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4,))), (4,)))
+                            consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4,)), top_k=1), (4,)))
                         elif i == 1:
                             consistency_outputs.append(
-                                torch.flip(self.network(torch.flip(unsup_data, (4, 3,))), (4, 3,)))
+                                torch.flip(self.network(torch.flip(unsup_data, (4, 3,)), top_k=1), (4, 3,)))
                         elif i == 2:
                             consistency_outputs.append(
-                                torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2))), (4, 3, 2)))
+                                torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2)), top_k=1), (4, 3, 2)))
+                        else:
+                            break
                     del unsup_data
-                    ul = self.unsup_loss(output, consistency_counts)
+                    ul = 0.5*self.unsup_loss(consistency_counts)
+                    l = 0.8*l + 0.2*self.sim_loss(output, consistency_counts)
+
                     if consistency_counts == 1:
                         l = 0.9 * l + 0.1 * ul
                     elif consistency_counts == 2:
@@ -297,6 +311,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
                     elif consistency_counts > 3 and consistency_counts < 4:
                         l = 0.5 * l + 0.5 * ul
 
+
                 if do_backprop:
                     self.amp_grad_scaler.scale(l).backward()
                     self.amp_grad_scaler.unscale_(self.optimizer)
@@ -304,6 +319,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
                     self.amp_grad_scaler.step(self.optimizer)
                     self.amp_grad_scaler.update()
             else:
+                print("enter wrong branch")
                 output = self.network(data)
                 del data
                 l = self.loss(output, target)
@@ -318,7 +334,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
                         consistency_outputs.append(
                             torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2))), (4, 3, 2)))
                 del unsup_data
-                ul = self.unsup_loss(output, consistency_counts)
+                ul = 0.5*self.unsup_loss(consistency_counts) + 0.5*self.sim_loss(output, consistency_counts)
                 if consistency_counts == 1:
                     l = 0.9 * l + 0.1 * ul
                 elif consistency_counts == 2:
@@ -340,6 +356,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
             return l.detach().cpu().numpy()
         else:
+            print("enter wrong branch")
             data_dict = next(data_generator)
             data = data_dict['data']
             target = data_dict['target']

@@ -19,13 +19,13 @@ from torch import nn
 class UnsupervisedLoss(nn.Module):
     def __init__(self):
         super(UnsupervisedLoss, self).__init__()
-        self.ce = nn.CrossEntropyLoss()
+        self.loss = nn.SmoothL1Loss()
 
-    def forward(self, output, consistency_counts):
+    def forward(self, consistency_counts):
         assert isinstance(consistency_counts, (tuple, list)), "consistency_counts must be either tuple or list"
-        ce_loss = 0
+        all_loss = 0
         for i in range(len(consistency_counts)):
             for j in range(i + 1, len(consistency_counts)):
-                ce_loss += 1 / (len(consistency_counts) * (len(consistency_counts) - 1) / 2) * self.ce(
+                all_loss += 1 / (len(consistency_counts) * (len(consistency_counts) - 1) / 2) * self.loss(
                     consistency_counts[i], consistency_counts[j])
-        return ce_loss
+        return all_loss
