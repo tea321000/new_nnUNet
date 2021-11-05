@@ -12,14 +12,18 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-from batchgenerators.dataloading import MultiThreadedAugmenter
-from batchgenerators.transforms import DataChannelSelectionTransform, SegChannelSelectionTransform, SpatialTransform, \
-    GammaTransform, MirrorTransform, Compose
+from batchgenerators.dataloading.multi_threaded_augmenter import MultiThreadedAugmenter
+from batchgenerators.transforms.abstract_transforms import Compose
+from batchgenerators.transforms.channel_selection_transforms import DataChannelSelectionTransform, \
+    SegChannelSelectionTransform
 from batchgenerators.transforms.color_transforms import BrightnessMultiplicativeTransform, \
     ContrastAugmentationTransform, BrightnessTransform
+from batchgenerators.transforms.color_transforms import GammaTransform
 from batchgenerators.transforms.noise_transforms import GaussianNoiseTransform, GaussianBlurTransform
 from batchgenerators.transforms.resample_transforms import SimulateLowResolutionTransform
+from batchgenerators.transforms.spatial_transforms import SpatialTransform, MirrorTransform
 from batchgenerators.transforms.utility_transforms import RemoveLabelTransform, RenameTransform, NumpyToTensor
+
 from nnunet.training.data_augmentation.custom_transforms import Convert3DTo2DTransform, Convert2DTo3DTransform, \
     MaskTransform, ConvertSegmentationToRegionsTransform
 from nnunet.training.data_augmentation.default_data_augmentation import default_3D_augmentation_params
@@ -39,7 +43,7 @@ def get_moreDA_augmentation(dataloader_train, dataloader_val, patch_size, params
                             seeds_train=None, seeds_val=None, order_seg=1, order_data=3, deep_supervision_scales=None,
                             soft_ds=False,
                             classes=None, pin_memory=True, regions=None,
-                            use_nondetMultiThreadedAugmenter: bool = False):
+                            use_nondetMultiThreadedAugmenter: bool = False, dataloader_unsup=None):
     assert params.get('mirror') is None, "old version of params, use new keyword do_mirror"
 
     tr_transforms = []
@@ -143,7 +147,7 @@ def get_moreDA_augmentation(dataloader_train, dataloader_val, patch_size, params
             assert classes is not None
             tr_transforms.append(DownsampleSegForDSTransform3(deep_supervision_scales, 'target', 'target', classes))
         else:
-            tr_transforms.append(DownsampleSegForDSTransform2(deep_supervision_scales, 0, 0, input_key='target',
+            tr_transforms.append(DownsampleSegForDSTransform2(deep_supervision_scales, 0, input_key='target',
                                                               output_key='target'))
 
     tr_transforms.append(NumpyToTensor(['data', 'target'], 'float'))
@@ -152,13 +156,21 @@ def get_moreDA_augmentation(dataloader_train, dataloader_val, patch_size, params
     if use_nondetMultiThreadedAugmenter:
         if NonDetMultiThreadedAugmenter is None:
             raise RuntimeError('NonDetMultiThreadedAugmenter is not yet available')
-        batchgenerator_train = NonDetMultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads'),
+        batchgenerator_train = NonDetMultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads') if dataloader_unsup is None else max(params.get('num_threads') // 2, 1),
                                                             params.get("num_cached_per_thread"), seeds=seeds_train,
                                                             pin_memory=pin_memory)
+        if dataloader_unsup is not None:
+            batchgenerator_unsup = NonDetMultiThreadedAugmenter(dataloader_unsup, tr_transforms, params.get('num_threads'),
+                                                                params.get("num_cached_per_thread"), seeds=seeds_train,
+                                                                pin_memory=pin_memory)
     else:
-        batchgenerator_train = MultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads'),
+        batchgenerator_train = MultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads') if dataloader_unsup is None else max(params.get('num_threads') // 2, 1),
                                                       params.get("num_cached_per_thread"),
                                                       seeds=seeds_train, pin_memory=pin_memory)
+        if dataloader_unsup is not None:
+            batchgenerator_unsup = MultiThreadedAugmenter(dataloader_unsup, tr_transforms, params.get('num_threads'),
+                                                          params.get("num_cached_per_thread"),
+                                                          seeds=seeds_train, pin_memory=pin_memory)
     # batchgenerator_train = SingleThreadedAugmenter(dataloader_train, tr_transforms)
     # import IPython;IPython.embed()
 
@@ -182,7 +194,7 @@ def get_moreDA_augmentation(dataloader_train, dataloader_val, patch_size, params
             assert classes is not None
             val_transforms.append(DownsampleSegForDSTransform3(deep_supervision_scales, 'target', 'target', classes))
         else:
-            val_transforms.append(DownsampleSegForDSTransform2(deep_supervision_scales, 0, 0, input_key='target',
+            val_transforms.append(DownsampleSegForDSTransform2(deep_supervision_scales, 0, input_key='target',
                                                                output_key='target'))
 
     val_transforms.append(NumpyToTensor(['data', 'target'], 'float'))
@@ -201,6 +213,8 @@ def get_moreDA_augmentation(dataloader_train, dataloader_val, patch_size, params
                                                     params.get("num_cached_per_thread"),
                                                     seeds=seeds_val, pin_memory=pin_memory)
     # batchgenerator_val = SingleThreadedAugmenter(dataloader_val, val_transforms)
-
-    return batchgenerator_train, batchgenerator_val
+    if dataloader_unsup is not None:
+        return batchgenerator_train, batchgenerator_unsup, batchgenerator_val
+    else:
+        return batchgenerator_train, batchgenerator_val
 

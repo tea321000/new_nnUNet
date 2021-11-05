@@ -16,10 +16,14 @@ import os
 from copy import deepcopy
 
 import numpy as np
-from batchgenerators.dataloading import MultiThreadedAugmenter
-from batchgenerators.transforms import DataChannelSelectionTransform, SegChannelSelectionTransform, SpatialTransform, \
-    GammaTransform, MirrorTransform, Compose
+from batchgenerators.dataloading.multi_threaded_augmenter import MultiThreadedAugmenter
+from batchgenerators.transforms.abstract_transforms import Compose
+from batchgenerators.transforms.channel_selection_transforms import DataChannelSelectionTransform, \
+    SegChannelSelectionTransform
+from batchgenerators.transforms.color_transforms import GammaTransform
+from batchgenerators.transforms.spatial_transforms import SpatialTransform, MirrorTransform
 from batchgenerators.transforms.utility_transforms import RemoveLabelTransform, RenameTransform, NumpyToTensor
+
 from nnunet.training.data_augmentation.custom_transforms import Convert3DTo2DTransform, Convert2DTo3DTransform, \
     MaskTransform, ConvertSegmentationToRegionsTransform
 from nnunet.training.data_augmentation.pyramid_augmentations import MoveSegAsOneHotToData, \
@@ -129,7 +133,7 @@ def get_patch_size(final_patch_size, rot_x, rot_y, rot_z, scale_range):
 
 def get_default_augmentation(dataloader_train, dataloader_val, patch_size, params=default_3D_augmentation_params,
                              border_val_seg=-1, pin_memory=True,
-                             seeds_train=None, seeds_val=None, regions=None):
+                             seeds_train=None, seeds_val=None, regions=None, dataloader_unsup=None):
     assert params.get('mirror') is None, "old version of params, use new keyword do_mirror"
     tr_transforms = []
 
@@ -202,9 +206,13 @@ def get_default_augmentation(dataloader_train, dataloader_val, patch_size, param
     # batchgenerator_train = SingleThreadedAugmenter(dataloader_train, tr_transforms)
     # import IPython;IPython.embed()
 
-    batchgenerator_train = MultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads'),
+    batchgenerator_train = MultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads') if dataloader_unsup is None else max(params.get('num_threads') // 2, 1),
                                                   params.get("num_cached_per_thread"), seeds=seeds_train,
                                                   pin_memory=pin_memory)
+    if dataloader_unsup is not None:
+        batchgenerator_unsup = MultiThreadedAugmenter(dataloader_unsup, tr_transforms, params.get('num_threads'),
+                                                      params.get("num_cached_per_thread"), seeds=seeds_train,
+                                                      pin_memory=pin_memory)
 
     val_transforms = []
     val_transforms.append(RemoveLabelTransform(-1, 0))
@@ -228,7 +236,10 @@ def get_default_augmentation(dataloader_train, dataloader_val, patch_size, param
     batchgenerator_val = MultiThreadedAugmenter(dataloader_val, val_transforms, max(params.get('num_threads') // 2, 1),
                                                 params.get("num_cached_per_thread"), seeds=seeds_val,
                                                 pin_memory=pin_memory)
-    return batchgenerator_train, batchgenerator_val
+    if dataloader_unsup is not None:
+        return batchgenerator_train, batchgenerator_unsup, batchgenerator_val
+    else:
+        return batchgenerator_train, batchgenerator_val
 
 
 if __name__ == "__main__":

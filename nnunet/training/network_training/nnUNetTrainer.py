@@ -20,10 +20,13 @@ from time import sleep
 from typing import Tuple, List
 
 import matplotlib
-import nnunet
 import numpy as np
 import torch
 from batchgenerators.utilities.file_and_folder_operations import *
+from torch import nn
+from torch.optim import lr_scheduler
+
+import nnunet
 from nnunet.configuration import default_num_threads
 from nnunet.evaluation.evaluator import aggregate_scores
 from nnunet.inference.segmentation_export import save_segmentation_nifti_from_softmax
@@ -38,16 +41,13 @@ from nnunet.training.loss_functions.dice_loss import DC_and_CE_loss
 from nnunet.training.network_training.network_trainer import NetworkTrainer
 from nnunet.utilities.nd_softmax import softmax_helper
 from nnunet.utilities.tensor_utilities import sum_tensor
-from torch import nn
-from torch.optim import lr_scheduler
-
 
 matplotlib.use("agg")
 
 
 class nnUNetTrainer(NetworkTrainer):
     def __init__(self, plans_file, fold, output_folder=None, dataset_directory=None, batch_dice=True, stage=None,
-                 unpack_data=True, deterministic=True, fp16=False):
+                 unpack_data=True, deterministic=True, fp16=False, semi_percent=0.2):
         """
         :param deterministic:
         :param fold: can be either [0 ... 5) for cross-validation, 'all' to train on all available training data or
@@ -72,7 +72,7 @@ class nnUNetTrainer(NetworkTrainer):
         IMPORTANT: If you inherit from nnUNetTrainer and the init args change then you need to redefine self.init_args
         in your init accordingly. Otherwise checkpoints won't load properly!
         """
-        super(nnUNetTrainer, self).__init__(deterministic, fp16)
+        super(nnUNetTrainer, self).__init__(deterministic, fp16, semi_percent)
         self.unpack_data = unpack_data
         self.init_args = (plans_file, fold, output_folder, dataset_directory, batch_dice, stage, unpack_data,
                           deterministic, fp16)
@@ -204,8 +204,10 @@ class nnUNetTrainer(NetworkTrainer):
         if training:
             self.folder_with_preprocessed_data = join(self.dataset_directory, self.plans['data_identifier'] +
                                                       "_stage%d" % self.stage)
-
-            self.dl_tr, self.dl_val = self.get_basic_generators()
+            if self.semi_percent < 1:
+                self.dl_tr, self.dl_unsup, self.dl_val = self.get_basic_generators()
+            else:
+                self.dl_tr, self.dl_val = self.get_basic_generators()
             if self.unpack_data:
                 self.print_to_log_file("unpacking dataset")
                 unpack_dataset(self.folder_with_preprocessed_data)
@@ -214,12 +216,21 @@ class nnUNetTrainer(NetworkTrainer):
                 self.print_to_log_file(
                     "INFO: Not unpacking data! Training may be slow due to that. Pray you are not using 2d or you "
                     "will wait all winter for your model to finish!")
-            self.tr_gen, self.val_gen = get_default_augmentation(self.dl_tr, self.dl_val,
-                                                                 self.data_aug_params[
-                                                                     'patch_size_for_spatialtransform'],
-                                                                 self.data_aug_params)
+            if self.semi_percent < 1:
+                self.tr_gen, self.unsup_gen, self.val_gen = get_default_augmentation(self.dl_tr, self.dl_val,
+                                                                     self.data_aug_params[
+                                                                         'patch_size_for_spatialtransform'],
+                                                                     self.data_aug_params, dataloader_unsup=self.dl_unsup)
+            else:
+                self.tr_gen, self.val_gen = get_default_augmentation(self.dl_tr, self.dl_val,
+                                                                     self.data_aug_params[
+                                                                         'patch_size_for_spatialtransform'],
+                                                                     self.data_aug_params)
             self.print_to_log_file("TRAINING KEYS:\n %s" % (str(self.dataset_tr.keys())),
                                    also_print_to_console=False)
+            if self.semi_percent<1:
+                self.print_to_log_file("UNSUPERVISED KEYS:\n %s" % (str(self.dataset_unsup.keys())),
+                                       also_print_to_console=False)
             self.print_to_log_file("VALIDATION KEYS:\n %s" % (str(self.dataset_val.keys())),
                                    also_print_to_console=False)
         else:
@@ -405,6 +416,10 @@ class nnUNetTrainer(NetworkTrainer):
             dl_val = DataLoader3D(self.dataset_val, self.patch_size, self.patch_size, self.batch_size, False,
                                   oversample_foreground_percent=self.oversample_foreground_percent,
                                   pad_mode="constant", pad_sides=self.pad_all_sides, memmap_mode='r')
+            if self.semi_percent < 1:
+                dl_unsup = DataLoader3D(self.dataset_unsup, self.basic_generator_patch_size, self.patch_size, self.batch_size,
+                                     False, oversample_foreground_percent=self.oversample_foreground_percent,
+                                     pad_mode="constant", pad_sides=self.pad_all_sides, memmap_mode='r')
         else:
             dl_tr = DataLoader2D(self.dataset_tr, self.basic_generator_patch_size, self.patch_size, self.batch_size,
                                  oversample_foreground_percent=self.oversample_foreground_percent,
@@ -412,7 +427,14 @@ class nnUNetTrainer(NetworkTrainer):
             dl_val = DataLoader2D(self.dataset_val, self.patch_size, self.patch_size, self.batch_size,
                                   oversample_foreground_percent=self.oversample_foreground_percent,
                                   pad_mode="constant", pad_sides=self.pad_all_sides, memmap_mode='r')
-        return dl_tr, dl_val
+            if self.semi_percent < 1:
+                dl_unsup = DataLoader2D(self.dataset_unsup, self.basic_generator_patch_size, self.patch_size, self.batch_size,
+                                     oversample_foreground_percent=self.oversample_foreground_percent,
+                                     pad_mode="constant", pad_sides=self.pad_all_sides, memmap_mode='r')
+        if self.semi_percent < 1:
+            return dl_tr, dl_unsup, dl_val
+        else:
+            return dl_tr, dl_val
 
     def preprocess_patient(self, input_files):
         """

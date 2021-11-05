@@ -12,9 +12,12 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-from batchgenerators.dataloading import MultiThreadedAugmenter
-from batchgenerators.transforms import DataChannelSelectionTransform, SegChannelSelectionTransform, Compose
+from batchgenerators.dataloading.multi_threaded_augmenter import MultiThreadedAugmenter
+from batchgenerators.transforms.abstract_transforms import Compose
+from batchgenerators.transforms.channel_selection_transforms import DataChannelSelectionTransform, \
+    SegChannelSelectionTransform
 from batchgenerators.transforms.utility_transforms import RemoveLabelTransform, RenameTransform, NumpyToTensor
+
 from nnunet.training.data_augmentation.custom_transforms import ConvertSegmentationToRegionsTransform
 from nnunet.training.data_augmentation.default_data_augmentation import default_3D_augmentation_params
 from nnunet.training.data_augmentation.downsampling import DownsampleSegForDSTransform3, DownsampleSegForDSTransform2
@@ -27,7 +30,7 @@ except ImportError as ie:
 
 def get_no_augmentation(dataloader_train, dataloader_val, params=default_3D_augmentation_params,
                         deep_supervision_scales=None, soft_ds=False,
-                        classes=None, pin_memory=True, regions=None):
+                        classes=None, pin_memory=True, regions=None, dataloader_unsup=None):
     """
     use this instead of get_default_augmentation (drop in replacement) to turn off all data augmentation
     """
@@ -51,17 +54,21 @@ def get_no_augmentation(dataloader_train, dataloader_val, params=default_3D_augm
             assert classes is not None
             tr_transforms.append(DownsampleSegForDSTransform3(deep_supervision_scales, 'target', 'target', classes))
         else:
-            tr_transforms.append(DownsampleSegForDSTransform2(deep_supervision_scales, 0, 0, input_key='target',
+            tr_transforms.append(DownsampleSegForDSTransform2(deep_supervision_scales, 0, input_key='target',
                                                               output_key='target'))
 
     tr_transforms.append(NumpyToTensor(['data', 'target'], 'float'))
 
     tr_transforms = Compose(tr_transforms)
 
-    batchgenerator_train = MultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads'),
+    batchgenerator_train = MultiThreadedAugmenter(dataloader_train, tr_transforms, params.get('num_threads') if dataloader_unsup is None else max(params.get('num_threads'), 1),
                                                   params.get("num_cached_per_thread"),
                                                   seeds=range(params.get('num_threads')), pin_memory=pin_memory)
     batchgenerator_train.restart()
+    batchgenerator_unsup = MultiThreadedAugmenter(dataloader_unsup, tr_transforms, params.get('num_threads'),
+                                                  params.get("num_cached_per_thread"),
+                                                  seeds=range(params.get('num_threads')), pin_memory=pin_memory)
+    batchgenerator_unsup.restart()
 
     val_transforms = []
     val_transforms.append(RemoveLabelTransform(-1, 0))
@@ -80,7 +87,7 @@ def get_no_augmentation(dataloader_train, dataloader_val, params=default_3D_augm
             assert classes is not None
             val_transforms.append(DownsampleSegForDSTransform3(deep_supervision_scales, 'target', 'target', classes))
         else:
-            val_transforms.append(DownsampleSegForDSTransform2(deep_supervision_scales, 0, 0, input_key='target',
+            val_transforms.append(DownsampleSegForDSTransform2(deep_supervision_scales, 0, input_key='target',
                                                                output_key='target'))
 
     val_transforms.append(NumpyToTensor(['data', 'target'], 'float'))
@@ -91,5 +98,8 @@ def get_no_augmentation(dataloader_train, dataloader_val, params=default_3D_augm
                                                 seeds=range(max(params.get('num_threads') // 2, 1)),
                                                 pin_memory=pin_memory)
     batchgenerator_val.restart()
-    return batchgenerator_train, batchgenerator_val
+    if dataloader_unsup is not None:
+        return batchgenerator_train, batchgenerator_unsup, batchgenerator_val
+    else:
+        return batchgenerator_train, batchgenerator_val
 

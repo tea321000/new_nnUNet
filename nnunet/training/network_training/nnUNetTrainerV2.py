@@ -17,11 +17,14 @@ from collections import OrderedDict
 from typing import Tuple
 
 import numpy as np
+import math
 import torch
 from nnunet.training.data_augmentation.data_augmentation_moreDA import get_moreDA_augmentation
+from nnunet.training.loss_functions.unsup_loss import UnsupervisedLoss
+from nnunet.training.loss_functions.simcse_loss import SimCSELoss
 from nnunet.training.loss_functions.deep_supervision import MultipleOutputLoss2
 from nnunet.utilities.to_torch import maybe_to_torch, to_cuda
-from nnunet.network_architecture.generic_UNet import Generic_UNet
+from nnunet.network_architecture.generic_UNet_MOE import Generic_UNet_MOE
 from nnunet.network_architecture.initialization import InitWeights_He
 from nnunet.network_architecture.neural_network import SegmentationNetwork
 from nnunet.training.data_augmentation.default_data_augmentation import default_2D_augmentation_params, \
@@ -48,12 +51,15 @@ class nnUNetTrainerV2(nnUNetTrainer):
                  unpack_data=True, deterministic=True, fp16=False):
         super().__init__(plans_file, fold, output_folder, dataset_directory, batch_dice, stage, unpack_data,
                          deterministic, fp16)
-        self.max_num_epochs = 1000
+        self.max_num_epochs = 500
         self.initial_lr = 1e-2
         self.deep_supervision_scales = None
         self.ds_loss_weights = None
 
         self.pin_memory = True
+        # extra networks and optimizers for MOE
+        self.networks = []
+        self.optimizers = []
 
     def initialize(self, training=True, force_load_plans=False):
         """
@@ -90,12 +96,17 @@ class nnUNetTrainerV2(nnUNetTrainer):
             self.ds_loss_weights = weights
             # now wrap the loss
             self.loss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
+            self.unsup_loss = UnsupervisedLoss()
+            self.sim_loss = SimCSELoss()
             ################# END ###################
 
             self.folder_with_preprocessed_data = join(self.dataset_directory, self.plans['data_identifier'] +
                                                       "_stage%d" % self.stage)
             if training:
-                self.dl_tr, self.dl_val = self.get_basic_generators()
+                if self.semi_percent < 1:
+                    self.dl_tr, self.dl_unsup, self.dl_val = self.get_basic_generators()
+                else:
+                    self.dl_tr, self.dl_val = self.get_basic_generators()
                 if self.unpack_data:
                     print("unpacking dataset")
                     unpack_dataset(self.folder_with_preprocessed_data)
@@ -104,18 +115,32 @@ class nnUNetTrainerV2(nnUNetTrainer):
                     print(
                         "INFO: Not unpacking data! Training may be slow due to that. Pray you are not using 2d or you "
                         "will wait all winter for your model to finish!")
-
-                self.tr_gen, self.val_gen = get_moreDA_augmentation(
-                    self.dl_tr, self.dl_val,
-                    self.data_aug_params[
-                        'patch_size_for_spatialtransform'],
-                    self.data_aug_params,
-                    deep_supervision_scales=self.deep_supervision_scales,
-                    pin_memory=self.pin_memory,
-                    use_nondetMultiThreadedAugmenter=False
-                )
+                if self.semi_percent < 1:
+                    self.tr_gen, self.unsup_gen, self.val_gen = get_moreDA_augmentation(
+                        self.dl_tr, self.dl_val,
+                        self.data_aug_params[
+                            'patch_size_for_spatialtransform'],
+                        self.data_aug_params,
+                        deep_supervision_scales=self.deep_supervision_scales,
+                        pin_memory=self.pin_memory,
+                        use_nondetMultiThreadedAugmenter=False,
+                        dataloader_unsup=self.dl_unsup
+                    )
+                else:
+                    self.tr_gen, self.val_gen = get_moreDA_augmentation(
+                        self.dl_tr, self.dl_val,
+                        self.data_aug_params[
+                            'patch_size_for_spatialtransform'],
+                        self.data_aug_params,
+                        deep_supervision_scales=self.deep_supervision_scales,
+                        pin_memory=self.pin_memory,
+                        use_nondetMultiThreadedAugmenter=False
+                    )
                 self.print_to_log_file("TRAINING KEYS:\n %s" % (str(self.dataset_tr.keys())),
                                        also_print_to_console=False)
+                if self.semi_percent < 1:
+                    self.print_to_log_file("UNSUPERVISED KEYS:\n %s" % (str(self.dataset_unsup.keys())),
+                                           also_print_to_console=False)
                 self.print_to_log_file("VALIDATION KEYS:\n %s" % (str(self.dataset_val.keys())),
                                        also_print_to_console=False)
             else:
@@ -154,12 +179,15 @@ class nnUNetTrainerV2(nnUNetTrainer):
         dropout_op_kwargs = {'p': 0, 'inplace': True}
         net_nonlin = nn.LeakyReLU
         net_nonlin_kwargs = {'negative_slope': 1e-2, 'inplace': True}
-        self.network = Generic_UNet(self.num_input_channels, self.base_num_features, self.num_classes,
+        self.network = Generic_UNet_MOE(self.num_input_channels, self.base_num_features, self.num_classes,
                                     len(self.net_num_pool_op_kernel_sizes),
                                     self.conv_per_stage, 2, conv_op, norm_op, norm_op_kwargs, dropout_op,
                                     dropout_op_kwargs,
                                     net_nonlin, net_nonlin_kwargs, True, False, lambda x: x, InitWeights_He(1e-2),
                                     self.net_num_pool_op_kernel_sizes, self.net_conv_kernel_sizes, False, True, True)
+        # The method of load state dict is temporarily not enabled
+        # self.load_checkpoint(join(self.output_folder, "covid19_pretrain.model"), train=True)
+
         if torch.cuda.is_available():
             self.network.cuda()
         self.network.inference_apply_nonlin = softmax_helper
@@ -168,6 +196,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
         assert self.network is not None, "self.initialize_network must be called first"
         self.optimizer = torch.optim.SGD(self.network.parameters(), self.initial_lr, weight_decay=self.weight_decay,
                                          momentum=0.99, nesterov=True)
+
         self.lr_scheduler = None
 
     def run_online_evaluation(self, output, target):
@@ -205,7 +234,8 @@ class nnUNetTrainerV2(nnUNetTrainer):
                                                          use_sliding_window: bool = True, step_size: float = 0.5,
                                                          use_gaussian: bool = True, pad_border_mode: str = 'constant',
                                                          pad_kwargs: dict = None, all_in_gpu: bool = False,
-                                                         verbose: bool = True, mixed_precision=True) -> Tuple[np.ndarray, np.ndarray]:
+                                                         verbose: bool = True, mixed_precision=True) -> Tuple[
+        np.ndarray, np.ndarray]:
         """
         We need to wrap this because we need to enforce self.network.do_ds = False for prediction
         """
@@ -223,7 +253,8 @@ class nnUNetTrainerV2(nnUNetTrainer):
         self.network.do_ds = ds
         return ret
 
-    def run_iteration(self, data_generator, do_backprop=True, run_online_evaluation=False):
+    def run_iteration(self, data_generator, do_backprop=True, run_online_evaluation=False, data_unsup_generator=None,
+                      epochs=0, threshold_epochs=100):
         """
         gradient clipping improves training stability
 
@@ -232,47 +263,144 @@ class nnUNetTrainerV2(nnUNetTrainer):
         :param run_online_evaluation:
         :return:
         """
-        data_dict = next(data_generator)
-        data = data_dict['data']
-        target = data_dict['target']
+        if data_unsup_generator is not None:
+            data_dict = next(data_generator)
+            data = data_dict['data']
+            target = data_dict['target']
 
-        data = maybe_to_torch(data)
-        target = maybe_to_torch(target)
+            data_unsup_dict = next(data_unsup_generator)
+            unsup_data = data_unsup_dict['data']
+            unsup_data = maybe_to_torch(unsup_data)
 
-        if torch.cuda.is_available():
-            data = to_cuda(data)
-            target = to_cuda(target)
+            if torch.cuda.is_available():
+                data = to_cuda(data)
+                target = to_cuda(target)
+                unsup_data = to_cuda(unsup_data)
 
-        self.optimizer.zero_grad()
+            self.optimizer.zero_grad()
 
-        if self.fp16:
-            with autocast():
+            consistency_counts = epochs / threshold_epochs
+
+            if self.fp16:
+                with autocast():
+                    output = self.network(data, top_k=2)
+                    del data
+                    l = 0
+                    for i in range(2):
+                        l += 1/2*self.loss(output[i], target)
+                    consistency_outputs = []
+                    consistency_outputs.append(self.network(unsup_data, top_k=1))
+                    for i in range(max(consistency_counts, 3)):
+                        if i == 0:
+                            consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4,)), top_k=1), (4,)))
+                        elif i == 1:
+                            consistency_outputs.append(
+                                torch.flip(self.network(torch.flip(unsup_data, (4, 3,)), top_k=1), (4, 3,)))
+                        elif i == 2:
+                            consistency_outputs.append(
+                                torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2)), top_k=1), (4, 3, 2)))
+                        else:
+                            break
+                    del unsup_data
+                    ul = 0.5*self.unsup_loss(consistency_counts)
+                    l = 0.8*l + 0.2*self.sim_loss(output, consistency_counts)
+
+                    if consistency_counts == 1:
+                        l = 0.9 * l + 0.1 * ul
+                    elif consistency_counts == 2:
+                        l = 0.8 * l + 0.2 * ul
+                    elif consistency_counts == 3:
+                        l = 0.7 * l + 0.3 * ul
+                    elif consistency_counts > 3 and consistency_counts < 4:
+                        l = 0.5 * l + 0.5 * ul
+
+
+                if do_backprop:
+                    self.amp_grad_scaler.scale(l).backward()
+                    self.amp_grad_scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                    self.amp_grad_scaler.step(self.optimizer)
+                    self.amp_grad_scaler.update()
+            else:
+                print("enter wrong branch")
+                output = self.network(data)
+                del data
+                l = self.loss(output, target)
+                consistency_outputs = []
+                consistency_outputs.append(self.network(unsup_data))
+                for i in range(max(consistency_counts, 3)):
+                    if i == 0:
+                        consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4,))), (4,)))
+                    elif i == 1:
+                        consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4, 3,))), (4, 3,)))
+                    elif i == 2:
+                        consistency_outputs.append(
+                            torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2))), (4, 3, 2)))
+                del unsup_data
+                ul = 0.5*self.unsup_loss(consistency_counts) + 0.5*self.sim_loss(output, consistency_counts)
+                if consistency_counts == 1:
+                    l = 0.9 * l + 0.1 * ul
+                elif consistency_counts == 2:
+                    l = 0.8 * l + 0.2 * ul
+                elif consistency_counts == 3:
+                    l = 0.7 * l + 0.3 * ul
+                elif consistency_counts > 3 and consistency_counts < 4:
+                    l = 0.5 * l + 0.5 * ul
+
+                if do_backprop:
+                    l.backward()
+                    torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                    self.optimizer.step()
+
+            if run_online_evaluation:
+                self.run_online_evaluation(output, target)
+
+            del target
+
+            return l.detach().cpu().numpy()
+        else:
+            print("enter wrong branch")
+            data_dict = next(data_generator)
+            data = data_dict['data']
+            target = data_dict['target']
+
+            data = maybe_to_torch(data)
+            target = maybe_to_torch(target)
+
+            if torch.cuda.is_available():
+                data = to_cuda(data)
+                target = to_cuda(target)
+
+            self.optimizer.zero_grad()
+
+            if self.fp16:
+                with autocast():
+                    output = self.network(data)
+                    del data
+                    l = self.loss(output, target)
+
+                if do_backprop:
+                    self.amp_grad_scaler.scale(l).backward()
+                    self.amp_grad_scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                    self.amp_grad_scaler.step(self.optimizer)
+                    self.amp_grad_scaler.update()
+            else:
                 output = self.network(data)
                 del data
                 l = self.loss(output, target)
 
-            if do_backprop:
-                self.amp_grad_scaler.scale(l).backward()
-                self.amp_grad_scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
-                self.amp_grad_scaler.step(self.optimizer)
-                self.amp_grad_scaler.update()
-        else:
-            output = self.network(data)
-            del data
-            l = self.loss(output, target)
+                if do_backprop:
+                    l.backward()
+                    torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                    self.optimizer.step()
 
-            if do_backprop:
-                l.backward()
-                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
-                self.optimizer.step()
+            if run_online_evaluation:
+                self.run_online_evaluation(output, target)
 
-        if run_online_evaluation:
-            self.run_online_evaluation(output, target)
+            del target
 
-        del target
-
-        return l.detach().cpu().numpy()
+            return l.detach().cpu().numpy()
 
     def do_split(self):
         """
@@ -290,7 +418,8 @@ class nnUNetTrainerV2(nnUNetTrainer):
             tr_keys = val_keys = list(self.dataset.keys())
         else:
             splits_file = join(self.dataset_directory, "splits_final.pkl")
-
+            if self.semi_percent < 1:
+                semi_splits_file = join(self.dataset_directory, "splits_final_semi" + str(self.semi_percent) + ".pkl")
             # if the split file does not exist we need to create it
             if not isfile(splits_file):
                 self.print_to_log_file("Creating new 5-fold cross-validation split...")
@@ -305,6 +434,20 @@ class nnUNetTrainerV2(nnUNetTrainer):
                     splits[-1]['val'] = test_keys
                 save_pickle(splits, splits_file)
 
+            if self.semi_percent < 1:
+                if not isfile(semi_splits_file):
+                    self.print_to_log_file("Creating new semi split...")
+                    pk_dict = load_pickle(splits_file)
+                    for fold in range(len(pk_dict)):
+                        pk_dict[fold]['unsupervised'] = pk_dict[fold]['train'][
+                                                        math.floor(len(pk_dict[fold]['train']) * self.semi_percent):]
+                        pk_dict[fold]['train'] = pk_dict[fold]['train'][
+                                                 :math.floor(len(pk_dict[fold]['train']) * self.semi_percent)]
+                    save_pickle(pk_dict, semi_splits_file)
+            if self.semi_percent < 1:
+                self.print_to_log_file("Using splits from existing split file:", semi_splits_file)
+                splits = load_pickle(semi_splits_file)
+                self.print_to_log_file("The split file contains %d splits." % len(splits))
             else:
                 self.print_to_log_file("Using splits from existing split file:", splits_file)
                 splits = load_pickle(splits_file)
@@ -314,6 +457,8 @@ class nnUNetTrainerV2(nnUNetTrainer):
             if self.fold < len(splits):
                 tr_keys = splits[self.fold]['train']
                 val_keys = splits[self.fold]['val']
+                if self.semi_percent < 1:
+                    unsup_keys = splits[self.fold]['unsupervised']
                 self.print_to_log_file("This split has %d training and %d validation cases."
                                        % (len(tr_keys), len(val_keys)))
             else:
@@ -331,10 +476,18 @@ class nnUNetTrainerV2(nnUNetTrainer):
                                        % (len(tr_keys), len(val_keys)))
 
         tr_keys.sort()
+        if self.semi_percent < 1:
+            unsup_keys.sort()
         val_keys.sort()
         self.dataset_tr = OrderedDict()
         for i in tr_keys:
             self.dataset_tr[i] = self.dataset[i]
+
+        if self.semi_percent < 1:
+            self.dataset_unsup = OrderedDict()
+            for i in unsup_keys:
+                self.dataset_unsup[i] = self.dataset[i]
+
         self.dataset_val = OrderedDict()
         for i in val_keys:
             self.dataset_val[i] = self.dataset[i]
