@@ -289,21 +289,21 @@ class nnUNetTrainerV2(nnUNetTrainer):
                     for i in range(2):
                         l += 1/2*self.loss(output[i], target)
                     consistency_outputs = []
-                    consistency_outputs.append(self.network(unsup_data, top_k=1))
+                    consistency_outputs.append(self.network(unsup_data, top_k=1)[0][-1])
                     for i in range(max(consistency_counts, 3)):
-                        if i == 0:
-                            consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4,)), top_k=1), (4,)))
+                        if i == 0: 
+                            consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4,)), top_k=1)[0][-1], (4,)))
                         elif i == 1:
                             consistency_outputs.append(
-                                torch.flip(self.network(torch.flip(unsup_data, (4, 3,)), top_k=1), (4, 3,)))
+                                torch.flip(self.network(torch.flip(unsup_data, (4, 3,)), top_k=1)[0][-1], (4, 3,)))
                         elif i == 2:
                             consistency_outputs.append(
-                                torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2)), top_k=1), (4, 3, 2)))
+                                torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2)), top_k=1)[0][-1], (4, 3, 2)))
                         else:
                             break
                     del unsup_data
-                    ul = 0.5*self.unsup_loss(consistency_counts)
-                    l = 0.8*l + 0.2*self.sim_loss(output, consistency_counts)
+                    ul = self.unsup_loss(consistency_outputs)
+                    l = 0.8*l + 0.2*self.sim_loss(output, consistency_outputs)
 
                     if consistency_counts == 1:
                         l = 0.9 * l + 0.1 * ul

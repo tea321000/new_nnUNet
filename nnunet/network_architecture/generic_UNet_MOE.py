@@ -415,7 +415,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
 
         x = self.conv_blocks_context[-1](x)
         top_index = self.gate(x, top_k).T
-        seg_outputs = [[] for _ in range(len(top_index[1]))]
+        seg_outputs = [[] for _ in range(top_index.size()[0])]
         raw_x = x
         for index, val in enumerate(top_index):
             x = raw_x
@@ -429,7 +429,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
         del raw_x
         if self._deep_supervision and self.do_ds:
             return tuple(tuple([seg_outputs[k][-1]] + [i(j) for i, j in
-                                              zip(list(self.upscale_logits_ops)[::-1], seg_outputs[k][:-1][::-1])]) for k in range(len(top_index[1])))
+                                              zip(list(self.upscale_logits_ops)[::-1], seg_outputs[k][:-1][::-1])]) for k in range(top_index.size()[0]))
         else:
             return seg_outputs[-1]
 
