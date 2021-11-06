@@ -283,36 +283,38 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
             if self.fp16:
                 with autocast():
-                    output = self.network(data, top_k=2)
+                    output = self.network(data, top_k=1)
                     del data
                     l = 0
                     for i in range(2):
                         l += 1/2*self.loss(output[i], target)
-                    consistency_outputs = []
-                    consistency_outputs.append(self.network(unsup_data, top_k=1)[0][-1])
-                    for i in range(max(consistency_counts, 3)):
-                        if i == 0: 
-                            consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4,)), top_k=1)[0][-1], (4,)))
-                        elif i == 1:
-                            consistency_outputs.append(
-                                torch.flip(self.network(torch.flip(unsup_data, (4, 3,)), top_k=1)[0][-1], (4, 3,)))
-                        elif i == 2:
-                            consistency_outputs.append(
-                                torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2)), top_k=1)[0][-1], (4, 3, 2)))
-                        else:
-                            break
-                    del unsup_data
-                    ul = self.unsup_loss(consistency_outputs)
-                    l = 0.8*l + 0.2*self.sim_loss(output, consistency_outputs)
+                    # consistency_outputs = []
+                    # consistency_outputs.append(self.network(unsup_data, top_k=1)[0][-1])
+                    # if consistency_counts <4.5:
+                    #     for i in range(int(min(consistency_counts, 3))):
+                    #         if i == 0: 
+                    #             consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4,)), top_k=1)[0][-1], (4,)))
+                    #         elif i == 1:
+                    #             consistency_outputs.append(
+                    #                 torch.flip(self.network(torch.flip(unsup_data, (4, 3,)), top_k=1)[0][-1], (4, 3,)))
+                    #         elif i == 2:
+                    #             consistency_outputs.append(
+                    #                 torch.flip(self.network(torch.flip(unsup_data, (4, 3, 2)), top_k=1)[0][-1], (4, 3, 2)))
+                    #         else:
+                    #             break
+                    #     del unsup_data
+                    #     ul = 0.5*self.unsup_loss(consistency_outputs)+0.5*self.sim_loss(output, consistency_outputs)
 
-                    if consistency_counts == 1:
-                        l = 0.9 * l + 0.1 * ul
-                    elif consistency_counts == 2:
-                        l = 0.8 * l + 0.2 * ul
-                    elif consistency_counts == 3:
-                        l = 0.7 * l + 0.3 * ul
-                    elif consistency_counts > 3 and consistency_counts < 4:
-                        l = 0.5 * l + 0.5 * ul
+                    #     if consistency_counts <1:
+                    #         l = 0.9 * l + 0.1 * ul
+                    #     elif consistency_counts <2:
+                    #         l = 0.8 * l + 0.2 * ul
+                    #     elif consistency_counts <3:
+                    #         l = 0.7 * l + 0.3 * ul
+                    #     elif consistency_counts <4.5:
+                    #         l = 0.5 * l + 0.5 * ul
+                        
+                    
 
 
                 if do_backprop:
@@ -328,7 +330,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
                 l = self.loss(output, target)
                 consistency_outputs = []
                 consistency_outputs.append(self.network(unsup_data))
-                for i in range(max(consistency_counts, 3)):
+                for i in range(min(consistency_counts, 3)):
                     if i == 0:
                         consistency_outputs.append(torch.flip(self.network(torch.flip(unsup_data, (4,))), (4,)))
                     elif i == 1:
@@ -359,7 +361,6 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
             return l.detach().cpu().numpy()
         else:
-            print("enter wrong branch")
             data_dict = next(data_generator)
             data = data_dict['data']
             target = data_dict['target']
@@ -375,9 +376,11 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
             if self.fp16:
                 with autocast():
-                    output = self.network(data)
+                    output = self.network(data, top_k=2)
                     del data
-                    l = self.loss(output, target)
+                    l = 0
+                    for i in range(2):
+                        l += 1/2*self.loss(output[i], target)
 
                 if do_backprop:
                     self.amp_grad_scaler.scale(l).backward()

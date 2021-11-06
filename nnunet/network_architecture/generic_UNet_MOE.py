@@ -415,14 +415,19 @@ class Generic_UNet_MOE(SegmentationNetwork):
 
         x = self.conv_blocks_context[-1](x)
         top_index = self.gate(x, top_k).T
+        print("top_index", top_index)
         seg_outputs = [[] for _ in range(top_index.size()[0])]
         raw_x = x
         for index, val in enumerate(top_index):
             x = raw_x
             for u in range(len(self.tu[0])):
-                nx= self.tu[val[0]][u](x[0][None, :])
-                x = torch.cat((nx, self.tu[val[1]][u](x[1][None, :])), 0)
-                del nx
+                if x.size()[0] > 1:
+                    nx = self.tu[val[0]][u](x[0][None, :])
+                    x = torch.cat((nx, self.tu[val[1]][u](x[1][None, :])), 0)
+                    del nx
+                else:
+                    x = 1/2*self.tu[val[0]][u](x)+1/2*self.tu[val[1]][u](x)
+
                 x = torch.cat((x, skips[-(u + 1)]), dim=1)
                 x = self.conv_blocks_localization[u](x)
                 seg_outputs[index].append(self.final_nonlin(self.seg_outputs[index][u](x)))
