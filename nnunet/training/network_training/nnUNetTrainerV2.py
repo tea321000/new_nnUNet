@@ -285,9 +285,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
                 with autocast():
                     output = self.network(data, top_k=1)
                     del data
-                    l = 0
-                    for i in range(2):
-                        l += 1/2*self.loss(output[i], target)
+                    l = self.loss(output[0], target)
                     # consistency_outputs = []
                     # consistency_outputs.append(self.network(unsup_data, top_k=1)[0][-1])
                     # if consistency_counts <4.5:
@@ -376,11 +374,9 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
             if self.fp16:
                 with autocast():
-                    output = self.network(data, top_k=2)
+                    output = self.network(data, top_k=1)
                     del data
-                    l = 0
-                    for i in range(2):
-                        l += 1/2*self.loss(output[i], target)
+                    l = self.loss(output[0], target)
 
                 if do_backprop:
                     self.amp_grad_scaler.scale(l).backward()

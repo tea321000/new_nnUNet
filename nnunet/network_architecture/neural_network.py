@@ -528,37 +528,37 @@ class SegmentationNetwork(NeuralNetwork):
 
         for m in range(mirror_idx):
             if m == 0:
-                output = self(x, top_k=2)
-                print(output)
-                pred = self.inference_apply_nonlin(1/2*output[0]+1/2*output[1])
+                # print(output)
+                pred = self.inference_apply_nonlin(self(x, top_k=1))
+
                 result_torch += 1 / num_results * pred
 
             if m == 1 and (2 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, ))))
+                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, )), top_k=1))
                 result_torch += 1 / num_results * torch.flip(pred, (4,))
             
             if m == 2 and (1 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (3, ))))
+                pred = self.inference_apply_nonlin(self(torch.flip(x, (3, )), top_k=1))
                 result_torch += 1 / num_results * torch.flip(pred, (3,))
             
             if m == 3 and (2 in mirror_axes) and (1 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 3))))
+                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 3)), top_k=1))
                 result_torch += 1 / num_results * torch.flip(pred, (4, 3))
             
             if m == 4 and (0 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (2, ))))
+                pred = self.inference_apply_nonlin(self(torch.flip(x, (2, )), top_k=1))
                 result_torch += 1 / num_results * torch.flip(pred, (2,))
             
             if m == 5 and (0 in mirror_axes) and (2 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 2))))
+                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 2)), top_k=1))
                 result_torch += 1 / num_results * torch.flip(pred, (4, 2))
             
             if m == 6 and (0 in mirror_axes) and (1 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (3, 2))))
+                pred = self.inference_apply_nonlin(self(torch.flip(x, (3, 2)), top_k=1))
                 result_torch += 1 / num_results * torch.flip(pred, (3, 2))
 
             if m == 1 and (0 in mirror_axes) and (1 in mirror_axes) and (2 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 3, 2))))
+                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 3, 2)), top_k=1))
                 result_torch += 1 / num_results * torch.flip(pred, (4, 3, 2))
 
         if mult is not None:
