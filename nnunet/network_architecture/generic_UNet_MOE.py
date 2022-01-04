@@ -169,8 +169,17 @@ class Gate(nn.Module):
         super(Gate, self).__init__()
         self.num_of_experts = num_of_experts
         self.gate = nn.Linear(out_features, num_of_experts)
+        self.pos_embed = None
 
     def forward(self, x, top_k):
+        # if self._gaussian_3d is None:
+        #     self._gaussian_3d = self._get_gaussian(x.size(), sigma_scale=1. / 8)
+        #     self._gaussian_3d = self._gaussian_3d.half()
+        #     self._gaussian_3d[self._gaussian_3d == 0] = self._gaussian_3d[
+        #         self._gaussian_3d != 0].min()
+        if self.pos_embed is None:
+            self.pos_embed = nn.Parameter(torch.zeros(x.size())).to(x.device)
+        x = x + self.pos_embed
         gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(x.size(0), -1)
         gap = self.gate(gap)
         _, gate_top_k_idx = torch.topk(
@@ -178,6 +187,7 @@ class Gate(nn.Module):
         )
         # gap = gap.view(-1, top_k)
         # gap = nn.functional.softmax(gap, dim=-1)
+        print("top_k", gate_top_k_idx)
         return gate_top_k_idx
 
 
@@ -244,6 +254,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
         self._deep_supervision = deep_supervision
         self.do_ds = deep_supervision
         self.num_of_experts = num_of_experts
+
 
         if conv_op == nn.Conv2d:
             upsample_mode = 'bilinear'

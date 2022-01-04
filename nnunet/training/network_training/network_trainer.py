@@ -41,7 +41,7 @@ import math
 
 
 class NetworkTrainer(object):
-    def __init__(self, deterministic=True, fp16=False, semi_percent=0.2):
+    def __init__(self, deterministic=True, fp16=False, semi_percent = 0.5):
         """
         A generic class that can train almost any neural network (RNNs excluded). It provides basic functionality such
         as the training loop, tracking of training and validation losses (and the target metric if you implement it)
