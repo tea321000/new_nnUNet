@@ -21,11 +21,11 @@ class UnsupervisedLoss(nn.Module):
         super(UnsupervisedLoss, self).__init__()
         self.loss = nn.SmoothL1Loss()
 
-    def forward(self, consistency_counts):
-        assert isinstance(consistency_counts, (tuple, list)), "consistency_counts must be either tuple or list"
+    def forward(self, consistency_outputs):
+        assert isinstance(consistency_outputs, (tuple, list)), "consistency_outputs must be either tuple or list"
         all_loss = 0
-        for i in range(len(consistency_counts)):
-            for j in range(i + 1, len(consistency_counts)):
-                all_loss += 1 / (len(consistency_counts) * (len(consistency_counts) - 1) / 2) * self.loss(
-                    consistency_counts[i], consistency_counts[j])
+        for i in range(len(consistency_outputs)):
+            for j in range(i + 1, len(consistency_outputs)):
+                all_loss += 1 / (len(consistency_outputs) * (len(consistency_outputs) - 1) / 2) * self.loss(
+                    consistency_outputs[i], consistency_outputs[j])
         return all_loss

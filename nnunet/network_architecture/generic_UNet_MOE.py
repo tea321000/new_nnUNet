@@ -181,7 +181,9 @@ class Gate(nn.Module):
             self.pos_embed = nn.Parameter(torch.zeros(x.size())).to(x.device)
         x = x + self.pos_embed
         gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(x.size(0), -1)
+        # print("gap_size", gap.size())
         gap = self.gate(gap)
+        # print("gap_size", gap.size())
         _, gate_top_k_idx = torch.topk(
             gap, k=top_k, dim=-1, largest=True, sorted=True
         )
@@ -415,7 +417,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
             self.apply(self.weightInitializer)
             # self.apply(print_module_training_status)
 
-    def forward(self, x, top_k):
+    def forward(self, x, top_k, train=True):
         skips = []
 
         for d in range(len(self.conv_blocks_context) - 1):
@@ -425,24 +427,33 @@ class Generic_UNet_MOE(SegmentationNetwork):
                 x = self.td[d](x)
 
         x = self.conv_blocks_context[-1](x)
-        top_index = self.gate(x, top_k).T
-        seg_outputs = [[] for _ in range(len(top_index[1]))]
-        raw_x = x
-        for index, val in enumerate(top_index):
-            x = raw_x
-            for u in range(len(self.tu[0])):
-                nx= self.tu[val[0]][u](x[0][None, :])
-                x = torch.cat((nx, self.tu[val[1]][u](x[1][None, :])), 0)
-                del nx
+        top_index = self.gate(x, top_k)
+        print("top_index", top_index)
+        seg_outputs = [[] for _ in range(top_k)]
+        
+        for u in range(len(self.tu[0])):
+            nx = []
+            #样本维度
+            for index, val in enumerate(top_index):
+                #专家维度（每个样本选择的专家id，按topk排序）
+                for expert_index, expert in enumerate(val):
+                    if index == 0:
+                        nx.append(self.tu[expert][u](x[0][None, :]))
+                    else:
+                        nx[expert_index] = torch.cat((nx[expert_index], self.tu[expert][u](x[index][None, :])), 0)
+            for index in range(top_k):
+                x = nx[0]
+                del nx[0]
                 x = torch.cat((x, skips[-(u + 1)]), dim=1)
                 x = self.conv_blocks_localization[u](x)
                 seg_outputs[index].append(self.final_nonlin(self.seg_outputs[index][u](x)))
-        del raw_x
+        # del raw_x
+
         if self._deep_supervision and self.do_ds:
             return tuple(tuple([seg_outputs[k][-1]] + [i(j) for i, j in
-                                              zip(list(self.upscale_logits_ops)[::-1], seg_outputs[k][:-1][::-1])]) for k in range(len(top_index[1])))
+                                              zip(list(self.upscale_logits_ops)[::-1], seg_outputs[k][:-1][::-1])]) for k in range(top_k))
         else:
-            return seg_outputs[-1]
+            return seg_outputs[0][-1]
 
     @staticmethod
     def compute_approx_vram_consumption(patch_size, num_pool_per_axis, base_num_features, max_num_features,
