@@ -259,6 +259,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
         self.do_ds = deep_supervision
         self.num_of_experts = num_of_experts
         num_pool = 1
+        self.epochs = 0
 
 
         if conv_op == nn.Conv2d:
@@ -326,7 +327,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
             output_features = int(np.round(output_features * feat_map_mul_on_downscale))
 
             output_features = min(output_features, self.max_num_features)
-        self.gate = Gate(num_of_experts, self.epochs, output_features)
+        self.gate = Gate(num_of_experts, output_features)
         # now the bottleneck.
         # determine the first stride
         if self.convolutional_pooling:
@@ -430,7 +431,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
                 x = self.td[d](x)
 
         x = self.conv_blocks_context[-1](x)
-        top_index = self.gate(x, top_k)
+        top_index = self.gate(x, self.epochs, top_k)
         print("top_index", top_index)
         seg_outputs = [[] for _ in range(top_k)]
         
