@@ -374,7 +374,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
             if self.fp16:
                 with autocast():
-                    output = self.network(data, top_k=1)
+                    output = self.network(data, epochs, top_k=1)
                     del data
                     l = self.loss(output[0], target)
 
