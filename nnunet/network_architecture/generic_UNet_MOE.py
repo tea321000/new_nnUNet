@@ -172,7 +172,7 @@ class Gate(nn.Module):
         self.pos_embed = None
         self.threshod_epochs = 100
 
-    def forward(self, x, top_k):
+    def forward(self, x, epochs, top_k):
         # if self._gaussian_3d is None:
         #     self._gaussian_3d = self._get_gaussian(x.size(), sigma_scale=1. / 8)
         #     self._gaussian_3d = self._gaussian_3d.half()
@@ -183,7 +183,7 @@ class Gate(nn.Module):
         x = x + self.pos_embed
         gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(x.size(0), -1)
         # print("gap_size", gap.size())
-        if self.epochs < self.threshod_epochs:
+        if epochs < self.threshod_epochs:
             gate_top_k_idx = torch.randint(0, self.num_of_experts, (x.size(0), 1))
         else:
             gap = self.gate(gap)
@@ -326,7 +326,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
             output_features = int(np.round(output_features * feat_map_mul_on_downscale))
 
             output_features = min(output_features, self.max_num_features)
-        self.gate = Gate(num_of_experts, output_features)
+        self.gate = Gate(num_of_experts, self.epochs, output_features)
         # now the bottleneck.
         # determine the first stride
         if self.convolutional_pooling:
