@@ -170,8 +170,9 @@ class Gate(nn.Module):
         self.num_of_experts = num_of_experts
         self.gate = nn.Linear(out_features, num_of_experts)
         self.pos_embed = None
+        self.threshod_epochs = 100
 
-    def forward(self, x, top_k):
+    def forward(self, x, epochs, top_k):
         # if self._gaussian_3d is None:
         #     self._gaussian_3d = self._get_gaussian(x.size(), sigma_scale=1. / 8)
         #     self._gaussian_3d = self._gaussian_3d.half()
@@ -182,11 +183,13 @@ class Gate(nn.Module):
         x = x + self.pos_embed
         gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(x.size(0), -1)
         # print("gap_size", gap.size())
-        gap = self.gate(gap)
-        # print("gap_size", gap.size())
-        _, gate_top_k_idx = torch.topk(
-            gap, k=top_k, dim=-1, largest=True, sorted=True
-        )
+        if epochs < self.threshod_epochs:
+            gap = torch.randint(1, self.num_of_experts + 1, (1, x.size(0)))
+        else:
+            gap = self.gate(gap)
+            _, gate_top_k_idx = torch.topk(
+                gap, k=top_k, dim=-1, largest=True, sorted=True
+            )
         # gap = gap.view(-1, top_k)
         # gap = nn.functional.softmax(gap, dim=-1)
         print("top_k", gate_top_k_idx)
@@ -256,6 +259,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
         self._deep_supervision = deep_supervision
         self.do_ds = deep_supervision
         self.num_of_experts = num_of_experts
+        num_pool = 1
 
 
         if conv_op == nn.Conv2d:
@@ -417,7 +421,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
             self.apply(self.weightInitializer)
             # self.apply(print_module_training_status)
 
-    def forward(self, x, top_k, train=True):
+    def forward(self, x, epochs, top_k, train=True):
         skips = []
 
         for d in range(len(self.conv_blocks_context) - 1):
@@ -427,7 +431,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
                 x = self.td[d](x)
 
         x = self.conv_blocks_context[-1](x)
-        top_index = self.gate(x, top_k)
+        top_index = self.gate(x, epochs, top_k)
         print("top_index", top_index)
         seg_outputs = [[] for _ in range(top_k)]
         
