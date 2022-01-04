@@ -192,7 +192,6 @@ class Gate(nn.Module):
             )
         # gap = gap.view(-1, top_k)
         # gap = nn.functional.softmax(gap, dim=-1)
-        print("top_k", gate_top_k_idx)
         return gate_top_k_idx
 
 
