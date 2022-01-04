@@ -172,7 +172,7 @@ class Gate(nn.Module):
         self.pos_embed = None
         self.threshod_epochs = 100
 
-    def forward(self, x, epochs, top_k):
+    def forward(self, x, top_k):
         # if self._gaussian_3d is None:
         #     self._gaussian_3d = self._get_gaussian(x.size(), sigma_scale=1. / 8)
         #     self._gaussian_3d = self._gaussian_3d.half()
@@ -183,7 +183,7 @@ class Gate(nn.Module):
         x = x + self.pos_embed
         gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(x.size(0), -1)
         # print("gap_size", gap.size())
-        if epochs < self.threshod_epochs:
+        if self.epochs < self.threshod_epochs:
             gate_top_k_idx = torch.randint(0, self.num_of_experts, (x.size(0), 1))
         else:
             gap = self.gate(gap)
@@ -420,7 +420,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
             self.apply(self.weightInitializer)
             # self.apply(print_module_training_status)
 
-    def forward(self, x, epochs, top_k, train=True):
+    def forward(self, x, top_k, train=True):
         skips = []
 
         for d in range(len(self.conv_blocks_context) - 1):
@@ -430,7 +430,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
                 x = self.td[d](x)
 
         x = self.conv_blocks_context[-1](x)
-        top_index = self.gate(x, epochs, top_k)
+        top_index = self.gate(x, top_k)
         print("top_index", top_index)
         seg_outputs = [[] for _ in range(top_k)]
         

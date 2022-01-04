@@ -98,6 +98,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
             self.loss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
             self.unsup_loss = UnsupervisedLoss()
             self.sim_loss = SimCSELoss()
+            self.epochs = 0
             ################# END ###################
 
             self.folder_with_preprocessed_data = join(self.dataset_directory, self.plans['data_identifier'] +
@@ -263,6 +264,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
         :param run_online_evaluation:
         :return:
         """
+        self.epochs = epochs
         if data_unsup_generator is not None:
             data_dict = next(data_generator)
             data = data_dict['data']
@@ -283,7 +285,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
             if self.fp16:
                 with autocast():
-                    output = self.network(data, epochs, top_k=1)
+                    output = self.network(data, top_k=1)
                     del data
                     l = self.loss(output[0], target)
                     # consistency_outputs = []
@@ -374,7 +376,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
             if self.fp16:
                 with autocast():
-                    output = self.network(data, epochs, top_k=1)
+                    output = self.network(data, top_k=1)
                     del data
                     l = self.loss(output[0], target)
 

@@ -529,7 +529,7 @@ class SegmentationNetwork(NeuralNetwork):
         for m in range(mirror_idx):
             if m == 0:
                 # print(output)
-                pred = self.inference_apply_nonlin(self(x, top_k=1))
+                pred = self.inference_apply_nonlin(self(x, self.epochs, top_k=1))
 
                 result_torch += 1 / num_results * pred
 
