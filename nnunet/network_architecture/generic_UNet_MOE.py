@@ -184,7 +184,7 @@ class Gate(nn.Module):
         gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(x.size(0), -1)
         # print("gap_size", gap.size())
         if epochs < self.threshod_epochs:
-            gate_top_k_idx = torch.randint(1, self.num_of_experts + 1, (x.size(0), 1))
+            gate_top_k_idx = torch.randint(0, self.num_of_experts, (x.size(0), 1))
         else:
             gap = self.gate(gap)
             _, gate_top_k_idx = torch.topk(
