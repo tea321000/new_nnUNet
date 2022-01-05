@@ -169,28 +169,36 @@ class Gate(nn.Module):
         super(Gate, self).__init__()
         self.num_of_experts = num_of_experts
         self.gate = nn.Linear(out_features, num_of_experts)
-        self.pos_embed = None
+        # self.pos_embed = None
         self.threshod_epochs = 100
+        self.gaussian_map = dict()
 
-    def forward(self, x, epochs, top_k):
+    def forward(self, x, epochs, top_k, gaussian_func):
+        sz = x.size()
+        if sz not in self.gaussian_map:
+            self.gaussian_map[sz] = torch.from_numpy(gaussian_func(sz, sigma_scale=1. / 8))
+            self.gaussian_map[sz] = self.gaussian_map[sz].to(x.device, non_blocking=True)
+            self.gaussian_map[sz] = self.gaussian_map[sz].half()
+            self.gaussian_map[sz][self.gaussian_map[sz] == 0] = self.gaussian_map[sz][self.gaussian_map[sz] != 0].min()
         # if self._gaussian_3d is None:
         #     self._gaussian_3d = self._get_gaussian(x.size(), sigma_scale=1. / 8)
         #     self._gaussian_3d = self._gaussian_3d.half()
         #     self._gaussian_3d[self._gaussian_3d == 0] = self._gaussian_3d[
         #         self._gaussian_3d != 0].min()
-        if self.pos_embed is None:
-            self.pos_embed = nn.Parameter(torch.zeros(x.size())).to(x.device)
-        #in predict phase:
-        if x.size(0) == 1:
-            x = x + self.pos_embed[torch.randint(0, self.pos_embed.size(0), (1,))]
-        #in training phase:
-        else:
-            x = x + self.pos_embed
-        gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(x.size(0), -1)
-        print("x org size:", x.size(), "x pool size:", gap.size())
+        # if self.pos_embed is None:
+        #     self.pos_embed = nn.Parameter(torch.zeros(x.size())).to(x.device)
+        # #in predict phase:
+        # if x.size(0) == 1:
+        #     x = x + self.pos_embed[torch.randint(0, self.pos_embed.size(0), (1,))]
+        # #in training phase:
+        # else:
+        #     x = x + self.pos_embed
+        x = x + self.gaussian_map[sz]
+        gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(sz[0], -1)
+        print("x org size:", sz, "x pool size:", gap.size())
         # print("gap_size", gap.size())
         if epochs < self.threshod_epochs:
-            gate_top_k_idx = torch.randint(0, self.num_of_experts, (x.size(0), 1))
+            gate_top_k_idx = torch.randint(0, self.num_of_experts, (sz[0], 1))
         else:
             gap = self.gate(gap)
             _, gate_top_k_idx = torch.topk(
@@ -437,7 +445,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
                 x = self.td[d](x)
 
         x = self.conv_blocks_context[-1](x)
-        top_index = self.gate(x, self.epochs, top_k)
+        top_index = self.gate(x, self.epochs, top_k, self._get_gaussian)
         print("top_index", top_index)
         seg_outputs = [[] for _ in range(top_k)]
         
