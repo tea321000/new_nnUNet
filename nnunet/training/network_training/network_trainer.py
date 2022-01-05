@@ -481,7 +481,7 @@ class NetworkTrainer(object):
                     for b in tbar:
                         tbar.set_description("Epoch {}/{}".format(self.epoch + 1, self.max_num_epochs))
 
-                        l = self.run_iteration(self.tr_gen, True, data_unsup_generator=self.unsup_gen, epochs = self.epoch)
+                        l = self.run_iteration(self.tr_gen, True, data_unsup_generator=self.unsup_gen)
                         # already modified ul in trainer.py, so it is no need to add ul here
                         # if self.semi_percent < 1:
                         #     ul = self.run_iteration(self.unsup_gen, True, epochs = self.epoch + 1)
@@ -489,7 +489,7 @@ class NetworkTrainer(object):
                         train_losses_epoch.append(l)
             else:
                 for _ in range(self.num_batches_per_epoch):
-                    l = self.run_iteration(self.tr_gen, True, data_unsup_generator=self.unsup_gen, epochs = self.epoch)
+                    l = self.run_iteration(self.tr_gen, True, data_unsup_generator=self.unsup_gen)
                     train_losses_epoch.append(l)
 
             self.all_tr_losses.append(np.mean(train_losses_epoch))
