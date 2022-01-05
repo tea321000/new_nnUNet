@@ -195,7 +195,7 @@ class Gate(nn.Module):
         #     x = x + self.pos_embed
         x = x + self.gaussian_map[sz]
         gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(sz[0], -1)
-        print("x org size:", sz, "x pool size:", gap.size())
+        # print("x org size:", sz, "x pool size:", gap.size())
         # print("gap_size", gap.size())
         if epochs < self.threshod_epochs:
             gate_top_k_idx = torch.randint(0, self.num_of_experts, (sz[0], 1))
@@ -272,7 +272,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
         self._deep_supervision = deep_supervision
         self.do_ds = deep_supervision
         self.num_of_experts = num_of_experts
-        num_pool = 1
+        # num_pool = 1
         self.epochs = 0
 
 
@@ -446,7 +446,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
 
         x = self.conv_blocks_context[-1](x)
         top_index = self.gate(x, self.epochs, top_k, self._get_gaussian)
-        print("top_index", top_index)
+        # print("top_index", top_index)
         seg_outputs = [[] for _ in range(top_k)]
         
         for u in range(len(self.tu[0])):
@@ -455,12 +455,12 @@ class Generic_UNet_MOE(SegmentationNetwork):
             for index, val in enumerate(top_index):
                 #专家维度（每个样本选择的专家id，按topk排序）
                 for priority, expert in enumerate(val):
-                    print("index", index, "val", val, "priority", priority, "expert", expert)
+                    # print("index", index, "val", val, "priority", priority, "expert", expert)
                     if index == 0:
-                        print("x:", x.size(), "split size:", x[0][None, :].size(), "decode size:", self.tu[expert][u](x[0][None, :]).size())
+                        # print("x:", x.size(), "split size:", x[0][None, :].size(), "decode size:", self.tu[expert][u](x[0][None, :]).size())
                         nx.append(self.tu[expert][u](x[0][None, :]))
                     else:
-                        print("nx:", len(nx), "nx[priority]:" , nx[priority].size(), "cat:", self.tu[expert][u](x[index][None, :]).size())
+                        # print("nx:", len(nx), "nx[priority]:" , nx[priority].size(), "cat:", self.tu[expert][u](x[index][None, :]).size())
                         nx[priority] = torch.cat((nx[priority], self.tu[expert][u](x[index][None, :])), 0)
             for priority in range(top_k):
                 x = nx[priority]
