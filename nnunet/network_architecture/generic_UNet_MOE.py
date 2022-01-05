@@ -448,7 +448,9 @@ class Generic_UNet_MOE(SegmentationNetwork):
             print("top_index", top_index, "epochs", self.epochs)
             self.forward_count = 0
         seg_outputs = [[] for _ in range(top_k)]
-        
+
+        old_x = [x for _ in range(top_k)]
+        del x
         for u in range(len(self.tu[0])):
             nx = []
             #样本维度
@@ -458,15 +460,14 @@ class Generic_UNet_MOE(SegmentationNetwork):
                     # print("index", index, "val", val, "priority", priority, "expert", expert)
                     if index == 0:
                         # print("x:", x.size(), "split size:", x[0][None, :].size(), "decode size:", self.tu[expert][u](x[0][None, :]).size())
-                        nx.append(self.tu[expert][u](x[0][None, :]))
+                        nx.append(self.tu[expert][u](old_x[priority][0][None, :]))
                     else:
                         # print("nx:", len(nx), "nx[priority]:" , nx[priority].size(), "cat:", self.tu[expert][u](x[index][None, :]).size())
-                        nx[priority] = torch.cat((nx[priority], self.tu[expert][u](x[index][None, :])), 0)
+                        nx[priority] = torch.cat((nx[priority], self.tu[expert][u](old_x[priority][index][None, :])), 0)
             for priority in range(top_k):
-                x = nx[priority]
-                x = torch.cat((x, skips[-(u + 1)]), dim=1)
-                x = self.conv_blocks_localization[u](x)
-                seg_outputs[priority].append(self.final_nonlin(self.seg_outputs[priority][u](x)))
+                old_x[priority] = torch.cat((nx[priority], skips[-(u + 1)]), dim=1)
+                old_x[priority] = self.conv_blocks_localization[u](old_x[priority])
+                seg_outputs[priority].append(self.final_nonlin(self.seg_outputs[priority][u](old_x[priority])))
         # del raw_x
 
         if self._deep_supervision and self.do_ds:
