@@ -204,7 +204,7 @@ class Gate(nn.Module):
         #     #     gap, k=3, dim=-1, largest=True, sorted=True
         #     # ))
         # else:
-        
+
         noise = torch.empty(sz[0], self.num_of_experts).normal_(mean=0,std=1/self.num_of_experts).to(gap.device)
         gap = self.gate(gap) + noise
         gap = nn.functional.softmax(gap, dim=-1)
@@ -455,7 +455,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
         x = self.conv_blocks_context[-1](x)
         top_index = self.gate(x, self.epochs, top_k, self._get_gaussian)
         self.forward_count += 1
-        if self.forward_count > 10:
+        if self.forward_count > 100:
             print("top_index", top_index, "epochs", self.epochs)
             self.forward_count = 0
         seg_outputs = [[] for _ in range(top_k)]
