@@ -180,8 +180,14 @@ class Gate(nn.Module):
         #         self._gaussian_3d != 0].min()
         if self.pos_embed is None:
             self.pos_embed = nn.Parameter(torch.zeros(x.size())).to(x.device)
-        x = x + self.pos_embed
+        #in predict phase:
+        if x.size(0) == 1:
+            x = x + self.pos_embed[torch.randint(0, self.pos_embed.size(0), (1,))]
+        #in training phase:
+        else:
+            x = x + self.pos_embed
         gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(x.size(0), -1)
+        print("x org size:", x.size(), "x pool size:", gap.size())
         # print("gap_size", gap.size())
         if epochs < self.threshod_epochs:
             gate_top_k_idx = torch.randint(0, self.num_of_experts, (x.size(0), 1))
@@ -440,17 +446,19 @@ class Generic_UNet_MOE(SegmentationNetwork):
             #样本维度
             for index, val in enumerate(top_index):
                 #专家维度（每个样本选择的专家id，按topk排序）
-                for expert_index, expert in enumerate(val):
+                for priority, expert in enumerate(val):
+                    print("index", index, "val", val, "priority", priority, "expert", expert)
                     if index == 0:
+                        print("x:", x.size(), "split size:", x[0][None, :].size(), "decode size:", self.tu[expert][u](x[0][None, :]).size())
                         nx.append(self.tu[expert][u](x[0][None, :]))
                     else:
-                        nx[expert_index] = torch.cat((nx[expert_index], self.tu[expert][u](x[index][None, :])), 0)
-            for index in range(top_k):
-                x = nx[0]
-                del nx[0]
+                        print("nx:", len(nx), "nx[priority]:" , nx[priority].size(), "cat:", self.tu[expert][u](x[index][None, :]).size())
+                        nx[priority] = torch.cat((nx[priority], self.tu[expert][u](x[index][None, :])), 0)
+            for priority in range(top_k):
+                x = nx[priority]
                 x = torch.cat((x, skips[-(u + 1)]), dim=1)
                 x = self.conv_blocks_localization[u](x)
-                seg_outputs[index].append(self.final_nonlin(self.seg_outputs[index][u](x)))
+                seg_outputs[priority].append(self.final_nonlin(self.seg_outputs[priority][u](x)))
         # del raw_x
 
         if self._deep_supervision and self.do_ds:
