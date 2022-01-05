@@ -274,6 +274,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
         self.num_of_experts = num_of_experts
         # num_pool = 1
         self.epochs = 0
+        self.forward_count = 0
 
 
         if conv_op == nn.Conv2d:
@@ -446,7 +447,10 @@ class Generic_UNet_MOE(SegmentationNetwork):
 
         x = self.conv_blocks_context[-1](x)
         top_index = self.gate(x, self.epochs, top_k, self._get_gaussian)
-        # print("top_index", top_index)
+        self.forward_count += 1
+        if self.forward_count > 100:
+            print("top_index", top_index, "epochs", self.epochs)
+            self.forward_count = 0
         seg_outputs = [[] for _ in range(top_k)]
         
         for u in range(len(self.tu[0])):
