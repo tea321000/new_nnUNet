@@ -254,7 +254,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
         return ret
 
     def run_iteration(self, data_generator, do_backprop=True, run_online_evaluation=False, data_unsup_generator=None,
-                      epochs=0, threshold_epochs=100):
+                      threshold_epochs=100):
         """
         gradient clipping improves training stability
 
@@ -263,7 +263,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
         :param run_online_evaluation:
         :return:
         """
-        self.network.epochs = epochs
+        self.network.epochs = self.epoch
         if data_unsup_generator is not None:
             data_dict = next(data_generator)
             data = data_dict['data']
@@ -280,7 +280,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
             self.optimizer.zero_grad()
 
-            consistency_counts = epochs / threshold_epochs
+            consistency_counts = self.epoch / threshold_epochs
 
             if self.fp16:
                 with autocast():

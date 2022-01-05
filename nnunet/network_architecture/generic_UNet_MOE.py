@@ -170,7 +170,7 @@ class Gate(nn.Module):
         self.num_of_experts = num_of_experts
         self.gate = nn.Linear(out_features, num_of_experts)
         # self.pos_embed = None
-        self.threshod_epochs = 100
+        self.threshod_epochs = 10
         self.gaussian_map = dict()
 
     def forward(self, x, epochs, top_k, gaussian_func):
@@ -196,14 +196,21 @@ class Gate(nn.Module):
         x = x + self.gaussian_map[sz]
         gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(sz[0], -1)
         # print("x org size:", sz, "x pool size:", gap.size())
-        # print("gap_size", gap.size())
-        if epochs < self.threshod_epochs:
-            gate_top_k_idx = torch.randint(0, self.num_of_experts, (sz[0], 1))
-        else:
-            gap = self.gate(gap)
-            _, gate_top_k_idx = torch.topk(
-                gap, k=top_k, dim=-1, largest=True, sorted=True
-            )
+        # if epochs < self.threshod_epochs:
+        #     gate_top_k_idx = torch.randint(0, self.num_of_experts, (sz[0], 1))
+        #     gap = self.gate(gap)
+        #     # print("gap", gap)
+        #     # print("top_k result:", torch.topk(
+        #     #     gap, k=3, dim=-1, largest=True, sorted=True
+        #     # ))
+        # else:
+        
+        noise = torch.empty(sz[0], self.num_of_experts).normal_(mean=0,std=1/self.num_of_experts).to(gap.device)
+        gap = self.gate(gap) + noise
+        gap = nn.functional.softmax(gap, dim=-1)
+        _, gate_top_k_idx = torch.topk(
+            gap, k=top_k, dim=-1, largest=True, sorted=True
+        )
         # gap = gap.view(-1, top_k)
         # gap = nn.functional.softmax(gap, dim=-1)
         return gate_top_k_idx
@@ -448,7 +455,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
         x = self.conv_blocks_context[-1](x)
         top_index = self.gate(x, self.epochs, top_k, self._get_gaussian)
         self.forward_count += 1
-        if self.forward_count > 100:
+        if self.forward_count > 10:
             print("top_index", top_index, "epochs", self.epochs)
             self.forward_count = 0
         seg_outputs = [[] for _ in range(top_k)]
