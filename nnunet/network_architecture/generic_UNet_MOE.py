@@ -186,16 +186,16 @@ class Gate(nn.Module):
         noise = torch.empty(sz[0], self.num_of_experts).normal_(mean=0,std=1/self.num_of_experts).to(gap.device)
         gap = self.gate(gap) + noise * self.training if epochs < self.threshold_epochs else self.gate(gap)
         gap = nn.functional.softmax(gap, dim=-1)
-        if self.training and epochs < self.threshold_epochs:
-            _, top_index =  torch.topk(
-                gap, k=top_k, dim=-1, largest=True, sorted=True
-            )
-            mask = torch.zeros(sz[0], self.num_of_experts)
-            for idx, val in enumerate(top_index):
-                mask[idx, val] = 1
-            return mask, [list(i for i in range(self.num_of_experts)) for _ in range(sz[0])]
-        else:
-            return gap, [list(i for i in range(self.num_of_experts)) for _ in range(sz[0])]
+        # if self.training and epochs < self.threshold_epochs:
+        #     _, top_index =  torch.topk(
+        #         gap, k=top_k, dim=-1, largest=True, sorted=True
+        #     )
+        #     mask = torch.zeros(sz[0], self.num_of_experts)
+        #     for idx, val in enumerate(top_index):
+        #         mask[idx, val] = 1
+        #     return mask, [list(i for i in range(self.num_of_experts)) for _ in range(sz[0])]
+        # else:
+        return gap, [list(i for i in range(self.num_of_experts)) for _ in range(sz[0])]
 
         # return torch.topk(
         #     gap, k=self.num_of_experts, dim=-1, largest=True, sorted=True
