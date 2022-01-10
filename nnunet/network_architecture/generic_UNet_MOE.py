@@ -441,7 +441,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
         top_weight, top_index = self.gate(x, self.epochs, top_k)
         self.forward_count += 1
         if self.forward_count > 100:
-            print("top_index", top_index, "epochs", self.epochs)
+            print("top_weight", top_weight, "top_index", top_index, "epochs", self.epochs)
             self.forward_count = 0
         seg_outputs = [[] for _ in range(self.num_of_experts)]
 
@@ -468,7 +468,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
     # del raw_x
 
         if self._deep_supervision and self.do_ds:
-            print("top_weight", top_weight)
+            # print("top_weight", top_weight)
             return tuple(tuple([seg_outputs[k][-1]*top_weight[0][k]] + [i(j)*top_weight[0][k] for i, j in
                                               zip(list(self.upscale_logits_ops)[::-1], seg_outputs[k][:-1][::-1])]) for k in range(self.num_of_experts))
         else:
