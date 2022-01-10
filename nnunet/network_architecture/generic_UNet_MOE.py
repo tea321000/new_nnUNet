@@ -175,6 +175,7 @@ class Gate(nn.Module):
         )
         self.pos_embed = None
         self.dropout_percent = 0.5
+        self.threshold_epochs = 400
 
     def forward(self, x, epochs, top_k):
         sz = x.size()
@@ -183,9 +184,9 @@ class Gate(nn.Module):
         x = x + self.pos_embed
         gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(sz[0], -1)
         noise = torch.empty(sz[0], self.num_of_experts).normal_(mean=0,std=1/self.num_of_experts).to(gap.device)
-        gap = self.gate(gap) + noise * self.training
+        gap = self.gate(gap) + noise * self.training if epochs < self.threshold_epochs else self.gate(gap)
         gap = nn.functional.softmax(gap, dim=-1)
-        if self.training:
+        if self.training and epochs < self.threshold_epochs:
             _, top_index =  torch.topk(
                 gap, k=top_k, dim=-1, largest=True, sorted=True
             )
@@ -216,7 +217,8 @@ class Generic_UNet_MOE(SegmentationNetwork):
     MAX_FILTERS_2D = 480
 
     use_this_for_batch_size_computation_2D = 19739648
-    use_this_for_batch_size_computation_3D = 520000000  # 505789440
+    use_this_for_batch_size_computation_3D = 520000000 * 16 / 8  # 505789440
+
 
     def __init__(self, input_channels, base_num_features, num_classes, num_pool, num_conv_per_stage=2,
                  feat_map_mul_on_downscale=2, conv_op=nn.Conv2d,
