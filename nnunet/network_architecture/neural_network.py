@@ -529,7 +529,8 @@ class SegmentationNetwork(NeuralNetwork):
         for m in range(mirror_idx):
             if m == 0:
                 # print(output)
-                pred = self.inference_apply_nonlin(self(x, top_k=1))
+                ensemble_output = tuple(sum(x) for x in zip(*self(x, top_k=1)))
+                pred = self.inference_apply_nonlin(ensemble_output)
 
                 result_torch += 1 / num_results * pred
 

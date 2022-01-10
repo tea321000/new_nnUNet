@@ -168,53 +168,37 @@ class Gate(nn.Module):
     def __init__(self, num_of_experts, out_features):
         super(Gate, self).__init__()
         self.num_of_experts = num_of_experts
-        self.gate = nn.Linear(out_features, num_of_experts)
-        # self.pos_embed = None
-        self.threshod_epochs = 10
-        self.gaussian_map = dict()
-
-    def forward(self, x, epochs, top_k, gaussian_func):
-        sz = x.size()
-        if sz not in self.gaussian_map:
-            self.gaussian_map[sz] = torch.from_numpy(gaussian_func(sz, sigma_scale=1. / 8))
-            self.gaussian_map[sz] = self.gaussian_map[sz].to(x.device, non_blocking=True)
-            self.gaussian_map[sz] = self.gaussian_map[sz].half()
-            self.gaussian_map[sz][self.gaussian_map[sz] == 0] = self.gaussian_map[sz][self.gaussian_map[sz] != 0].min()
-        # if self._gaussian_3d is None:
-        #     self._gaussian_3d = self._get_gaussian(x.size(), sigma_scale=1. / 8)
-        #     self._gaussian_3d = self._gaussian_3d.half()
-        #     self._gaussian_3d[self._gaussian_3d == 0] = self._gaussian_3d[
-        #         self._gaussian_3d != 0].min()
-        # if self.pos_embed is None:
-        #     self.pos_embed = nn.Parameter(torch.zeros(x.size())).to(x.device)
-        # #in predict phase:
-        # if x.size(0) == 1:
-        #     x = x + self.pos_embed[torch.randint(0, self.pos_embed.size(0), (1,))]
-        # #in training phase:
-        # else:
-        #     x = x + self.pos_embed
-        x = x + self.gaussian_map[sz]
-        gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(sz[0], -1)
-        # print("x org size:", sz, "x pool size:", gap.size())
-        # if epochs < self.threshod_epochs:
-        #     gate_top_k_idx = torch.randint(0, self.num_of_experts, (sz[0], 1))
-        #     gap = self.gate(gap)
-        #     # print("gap", gap)
-        #     # print("top_k result:", torch.topk(
-        #     #     gap, k=3, dim=-1, largest=True, sorted=True
-        #     # ))
-        # else:
-
-        noise = torch.empty(sz[0], self.num_of_experts).normal_(mean=0,std=1/self.num_of_experts).to(gap.device)
-        gap = self.gate(gap) + noise
-        gap = nn.functional.softmax(gap, dim=-1)
-        _, gate_top_k_idx = torch.topk(
-            gap, k=top_k, dim=-1, largest=True, sorted=True
+        self.gate = torch.nn.Sequential(
+            nn.Linear(out_features, out_features//2),
+            nn.Linear(out_features//2, num_of_experts),
+            # nn.LeakyReLU()
         )
-        # gap = gap.view(-1, top_k)
-        # gap = nn.functional.softmax(gap, dim=-1)
-        return gate_top_k_idx
+        self.pos_embed = None
+        self.dropout_percent = 0.5
 
+    def forward(self, x, epochs, top_k):
+        sz = x.size()
+        if self.pos_embed is None:
+            self.pos_embed = nn.Parameter(torch.zeros(1, *sz[1:])).to(x.device)
+        x = x + self.pos_embed
+        gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(sz[0], -1)
+        noise = torch.empty(sz[0], self.num_of_experts).normal_(mean=0,std=1/self.num_of_experts).to(gap.device)
+        gap = self.gate(gap) + noise * self.training
+        gap = nn.functional.softmax(gap, dim=-1)
+        if self.training:
+            _, top_index =  torch.topk(
+                gap, k=top_k, dim=-1, largest=True, sorted=True
+            )
+            mask = torch.zeros(sz[0], self.num_of_experts)
+            for idx, val in enumerate(top_index):
+                mask[idx, val] = 1
+            return mask, [list(i for i in range(self.num_of_experts)) for _ in range(sz[0])]
+        else:
+            return gap, [list(i for i in range(self.num_of_experts)) for _ in range(sz[0])]
+
+        # return torch.topk(
+        #     gap, k=self.num_of_experts, dim=-1, largest=True, sorted=True
+        # )
 
 
 class Generic_UNet_MOE(SegmentationNetwork):
@@ -453,20 +437,21 @@ class Generic_UNet_MOE(SegmentationNetwork):
                 x = self.td[d](x)
 
         x = self.conv_blocks_context[-1](x)
-        top_index = self.gate(x, self.epochs, top_k, self._get_gaussian)
+
+        top_weight, top_index = self.gate(x, self.epochs, top_k)
         self.forward_count += 1
         if self.forward_count > 100:
             print("top_index", top_index, "epochs", self.epochs)
             self.forward_count = 0
-        seg_outputs = [[] for _ in range(top_k)]
+        seg_outputs = [[] for _ in range(self.num_of_experts)]
 
-        old_x = [x for _ in range(top_k)]
+        old_x = [x for _ in range(self.num_of_experts)]
         del x
         for u in range(len(self.tu[0])):
             nx = []
-            #样本维度
+            # 样本维度
             for index, val in enumerate(top_index):
-                #专家维度（每个样本选择的专家id，按topk排序）
+                # 专家维度（每个样本选择的专家id，按topk排序）
                 for priority, expert in enumerate(val):
                     # print("index", index, "val", val, "priority", priority, "expert", expert)
                     if index == 0:
@@ -474,18 +459,23 @@ class Generic_UNet_MOE(SegmentationNetwork):
                         nx.append(self.tu[expert][u](old_x[priority][0][None, :]))
                     else:
                         # print("nx:", len(nx), "nx[priority]:" , nx[priority].size(), "cat:", self.tu[expert][u](x[index][None, :]).size())
-                        nx[priority] = torch.cat((nx[priority], self.tu[expert][u](old_x[priority][index][None, :])), 0)
-            for priority in range(top_k):
+                        nx[priority] = torch.cat(
+                            (nx[priority], self.tu[expert][u](old_x[priority][index][None, :])), 0)
+            for priority in range(self.num_of_experts):
                 old_x[priority] = torch.cat((nx[priority], skips[-(u + 1)]), dim=1)
                 old_x[priority] = self.conv_blocks_localization[u](old_x[priority])
                 seg_outputs[priority].append(self.final_nonlin(self.seg_outputs[priority][u](old_x[priority])))
-        # del raw_x
+    # del raw_x
 
         if self._deep_supervision and self.do_ds:
-            return tuple(tuple([seg_outputs[k][-1]] + [i(j) for i, j in
-                                              zip(list(self.upscale_logits_ops)[::-1], seg_outputs[k][:-1][::-1])]) for k in range(top_k))
+            print("top_weight", top_weight)
+            return tuple(tuple([seg_outputs[k][-1]*top_weight[0][k]] + [i(j)*top_weight[0][k] for i, j in
+                                              zip(list(self.upscale_logits_ops)[::-1], seg_outputs[k][:-1][::-1])]) for k in range(self.num_of_experts))
         else:
-            return seg_outputs[0][-1]
+            seg_output_sum = seg_outputs[0][-1]*top_weight[0][0]
+            for i in range(1, self.num_of_experts):
+                seg_output_sum += seg_outputs[i][-1]*top_weight[0][i]
+            return seg_output_sum
 
     @staticmethod
     def compute_approx_vram_consumption(patch_size, num_pool_per_axis, base_num_features, max_num_features,

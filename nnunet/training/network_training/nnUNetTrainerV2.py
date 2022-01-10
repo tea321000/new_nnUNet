@@ -184,7 +184,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
                                     self.conv_per_stage, 2, conv_op, norm_op, norm_op_kwargs, dropout_op,
                                     dropout_op_kwargs,
                                     net_nonlin, net_nonlin_kwargs, True, False, lambda x: x, InitWeights_He(1e-2),
-                                    self.net_num_pool_op_kernel_sizes, self.net_conv_kernel_sizes, False, True, True)
+                                    self.net_num_pool_op_kernel_sizes, self.net_conv_kernel_sizes, False, True, True, num_of_experts=3)
         # The method of load state dict is temporarily not enabled
         # self.load_checkpoint(join(self.output_folder, "covid19_pretrain.model"), train=True)
 
@@ -286,7 +286,8 @@ class nnUNetTrainerV2(nnUNetTrainer):
                 with autocast():
                     output = self.network(data, top_k=1)
                     del data
-                    l = self.loss(output[0], target)
+                    ensemble_output = tuple(sum(x) for x in zip(*output))
+                    l = self.loss(ensemble_output, target)
                     # consistency_outputs = []
                     # consistency_outputs.append(self.network(unsup_data, top_k=1)[0][-1])
                     # if consistency_counts <4.5:
@@ -377,7 +378,8 @@ class nnUNetTrainerV2(nnUNetTrainer):
                 with autocast():
                     output = self.network(data, top_k=1)
                     del data
-                    l = self.loss(output[0], target)
+                    ensemble_output = tuple(sum(x) for x in zip(*output))
+                    l = self.loss(ensemble_output, target)
 
                 if do_backprop:
                     self.amp_grad_scaler.scale(l).backward()

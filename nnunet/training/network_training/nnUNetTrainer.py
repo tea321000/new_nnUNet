@@ -131,6 +131,8 @@ class nnUNetTrainer(NetworkTrainer):
         self.conv_per_stage = None
         self.regions_class_order = None
 
+        self.num_of_experts = 3
+
     def update_fold(self, fold):
         """
         used to swap between folds for inference (ensemble of models from cross-validation)
