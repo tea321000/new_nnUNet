@@ -267,7 +267,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
         self._deep_supervision = deep_supervision
         self.do_ds = deep_supervision
         self.num_of_experts = num_of_experts
-        num_pool = 1
+        # num_pool = 1
         self.epochs = 0
         self.forward_count = 0
 
