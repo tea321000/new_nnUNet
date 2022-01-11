@@ -181,11 +181,12 @@ class Gate(nn.Module):
         sz = x.size()
         if self.pos_embed is None:
             self.pos_embed = nn.Parameter(torch.zeros(1, *sz[1:])).to(x.device)
-        x = x + self.pos_embed
-        gap = nn.functional.adaptive_avg_pool3d(x, (1, 1, 1)).view(sz[0], -1)
+        # x = x + self.pos_embed
+        gap = nn.functional.adaptive_avg_pool3d(x.detach() + self.pos_embed, (1, 1, 1)).view(sz[0], -1)
         noise = torch.empty(sz[0], self.num_of_experts).normal_(mean=0,std=1/self.num_of_experts).to(gap.device)
         gap = self.gate(gap) + noise * self.training if epochs < self.threshold_epochs else self.gate(gap)
         gap = nn.functional.softmax(gap, dim=-1)
+        # comment select top_k
         # if self.training and epochs < self.threshold_epochs:
         #     _, top_index =  torch.topk(
         #         gap, k=top_k, dim=-1, largest=True, sorted=True
@@ -195,6 +196,7 @@ class Gate(nn.Module):
         #         mask[idx, val] = 1
         #     return mask, [list(i for i in range(self.num_of_experts)) for _ in range(sz[0])]
         # else:
+        #comment end
         return gap, [list(i for i in range(self.num_of_experts)) for _ in range(sz[0])]
 
         # return torch.topk(
@@ -265,7 +267,7 @@ class Generic_UNet_MOE(SegmentationNetwork):
         self._deep_supervision = deep_supervision
         self.do_ds = deep_supervision
         self.num_of_experts = num_of_experts
-        # num_pool = 1
+        num_pool = 1
         self.epochs = 0
         self.forward_count = 0
 
